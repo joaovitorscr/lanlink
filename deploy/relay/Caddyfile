@@ -1,0 +1,13 @@
+# Caddy gets a certificate automatically and proxies everything to the relay.
+# reverse_proxy passes WebSocket upgrades (the /relay endpoint) through as-is.
+{$RELAY_DOMAIN:relay.example.com} {
+	# Use 127.0.0.1:3340 when the relay runs under systemd on the same host.
+	reverse_proxy relay:3340 {
+		# Relay connections are long-lived; don't cut them off.
+		flush_interval -1
+		transport http {
+			read_timeout 0
+			write_timeout 0
+		}
+	}
+}
