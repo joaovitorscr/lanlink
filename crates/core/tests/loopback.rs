@@ -40,11 +40,7 @@ async fn tcp_round_trip() -> anyhow::Result<()> {
     let host = Node::start_with_secret_key(
         Config {
             allowed_peers: vec![client_id.to_string()],
-            services: vec![Service {
-                name: "echo".into(),
-                protocol: Protocol::Tcp,
-                port: echo_port,
-            }],
+            services: vec![Service::new("echo", Protocol::Tcp, echo_port)],
             ..Default::default()
         },
         host_key,

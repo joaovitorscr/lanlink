@@ -89,11 +89,9 @@ async fn main() -> anyhow::Result<()> {
         Cmd::Host { name, port, udp } => {
             let protocol = if udp { Protocol::Udp } else { Protocol::Tcp };
             config.services.retain(|s| s.name != name);
-            config.services.push(Service {
-                name: name.clone(),
-                protocol,
-                port,
-            });
+            config
+                .services
+                .push(Service::new(name.clone(), protocol, port));
             config.save()?;
             let node = Node::start(config).await?;
             println!("node id: {}", node.id());
@@ -192,5 +190,7 @@ fn print_event(ev: &NodeEvent) {
         NodeEvent::TunnelOpened(t) => println!("tunnel opened: {} -> {}", t.local_addr, t.service),
         NodeEvent::TunnelClosed(t) => println!("tunnel closed: {} -> {}", t.local_addr, t.service),
         NodeEvent::Error(e) => eprintln!("error: {e}"),
+        NodeEvent::PeerRequest(r) => println!("connection request from {}", r.id),
+        NodeEvent::NetworkChanged(_) | NodeEvent::LanWorldsChanged(_) => {}
     }
 }

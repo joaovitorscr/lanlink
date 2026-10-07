@@ -157,6 +157,9 @@ impl AppState {
                 NodeEvent::TunnelOpened(t) => self.add_tunnel(t),
                 NodeEvent::TunnelClosed(t) => self.tunnels.retain(|x| !same_tunnel(x, &t)),
                 NodeEvent::Error(e) => self.status = Some(e),
+                NodeEvent::PeerRequest(_)
+                | NodeEvent::NetworkChanged(_)
+                | NodeEvent::LanWorldsChanged(_) => {}
             },
             Msg::Resync => self.resync(),
             Msg::Error(e) => self.status = Some(e),
@@ -302,11 +305,7 @@ impl AppState {
         };
         let mut config = self.config.clone();
         config.services.retain(|s| s.name != name);
-        config.services.push(Service {
-            name,
-            protocol,
-            port,
-        });
+        config.services.push(Service::new(name, protocol, port));
         self.save_config(config);
     }
 

@@ -17,6 +17,43 @@ pub struct Service {
     pub protocol: Protocol,
     /// Local port on the host machine, e.g. 25565.
     pub port: u16,
+    /// Disabled services are not advertised and refuse new streams. Default true.
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    /// This service is a Minecraft Java server or "Open to LAN" world.
+    /// Host: if exactly one LAN world is detected, forward to its port instead of `port`.
+    /// Client: tunnels to it are announced on the local LAN so the world shows in Multiplayer.
+    #[serde(default)]
+    pub minecraft_lan: bool,
+}
+
+impl Service {
+    pub fn new(name: impl Into<String>, protocol: Protocol, port: u16) -> Self {
+        Self {
+            name: name.into(),
+            protocol,
+            port,
+            enabled: true,
+            minecraft_lan: false,
+        }
+    }
+}
+
+fn default_true() -> bool {
+    true
+}
+
+/// A client-side tunnel remembered across restarts.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SavedTunnel {
+    /// Peer NodeId string.
+    pub peer: String,
+    pub service: String,
+    /// Local port to listen on (127.0.0.1). 0 is never saved; the chosen port is saved instead.
+    pub local_port: u16,
+    /// Open this tunnel automatically when the app starts. Default true.
+    #[serde(default = "default_true")]
+    pub auto_open: bool,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -32,6 +69,15 @@ pub struct Config {
     /// Optional self-hosted relay URL, e.g. "https://relay.example.com". None = iroh defaults.
     #[serde(default)]
     pub relay_url: Option<String>,
+    /// Our display name, sent to peers in Hello. None = hostname.
+    #[serde(default)]
+    pub display_name: Option<String>,
+    /// Client tunnels to reopen on startup.
+    #[serde(default)]
+    pub saved_tunnels: Vec<SavedTunnel>,
+    /// Turn off listening for Minecraft "Open to LAN" broadcasts on this machine.
+    #[serde(default)]
+    pub disable_lan_detection: bool,
 }
 
 impl Config {
@@ -44,6 +90,10 @@ impl Config {
         dirs::config_dir()
             .unwrap_or_else(|| PathBuf::from("."))
             .join("lanlink")
+    }
+    /// Folder for log files: `dir()/logs`.
+    pub fn logs_dir() -> PathBuf {
+        Self::dir().join("logs")
     }
     pub fn load() -> anyhow::Result<Config> {
         let path = Self::dir().join("config.json");

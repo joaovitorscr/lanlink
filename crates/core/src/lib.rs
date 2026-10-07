@@ -11,13 +11,17 @@
 //!   UDP uses QUIC datagrams with a small header carrying the service id.
 //! - Latency: TCP_NODELAY on local sockets, small buffers, no extra framing on TCP streams.
 
+pub mod api;
 pub mod config;
 pub mod forward;
 pub mod node;
 pub mod protocol;
 pub mod stats;
 
-pub use config::{Config, Protocol, Service};
+pub use api::{
+    init_logging, LanWorld, LogGuard, NetworkStatus, PeerRequest, ServiceStatus, TunnelInfo,
+};
+pub use config::{Config, Protocol, SavedTunnel, Service};
 pub use iroh::{EndpointId as NodeId, SecretKey};
 pub use node::{ConnState, Node, NodeEvent, PeerInfo};
 pub use stats::LatencyStats;

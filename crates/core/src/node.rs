@@ -41,6 +41,16 @@ pub struct PeerInfo {
     pub latency_ms: Option<u32>,
     /// Rolling latency stats over the last minute of pings. Default until the first pong.
     pub stats: LatencyStats,
+    /// Why the last connect attempt failed, in plain words for the UI
+    /// (e.g. "Waiting for Arthur to accept your request", "Peer is offline"). None when connected.
+    pub last_error: Option<String>,
+    /// When the current connection was established.
+    pub connected_since: Option<std::time::SystemTime>,
+    /// The peer currently has a connection open to us (they can use our services).
+    pub inbound: bool,
+    /// Total tunnel payload bytes to / from this peer since the app started.
+    pub bytes_sent: u64,
+    pub bytes_received: u64,
     /// Services the peer advertises to us (learned on connect).
     pub services: Vec<Service>,
 }
@@ -51,6 +61,12 @@ pub enum NodeEvent {
     TunnelOpened(ActiveTunnel),
     TunnelClosed(ActiveTunnel),
     Error(String),
+    /// An unknown peer tried to connect. The UI should offer Allow / Deny.
+    PeerRequest(crate::PeerRequest),
+    /// Our own connectivity changed (relay, addresses, online).
+    NetworkChanged(crate::NetworkStatus),
+    /// The set of Minecraft "Open to LAN" worlds seen on this machine changed.
+    LanWorldsChanged(Vec<crate::LanWorld>),
 }
 
 /// The running lanlink node. Cheap to clone (Arc inside).
@@ -238,6 +254,11 @@ impl Node {
                     latency_ms: None,
                     stats: LatencyStats::default(),
                     services: Vec::new(),
+                    last_error: None,
+                    connected_since: None,
+                    inbound: false,
+                    bytes_sent: 0,
+                    bytes_received: 0,
                 });
             }
         }
@@ -405,6 +426,11 @@ impl Node {
                     latency_ms: None,
                     stats: LatencyStats::default(),
                     services: Vec::new(),
+                    last_error: None,
+                    connected_since: None,
+                    inbound: false,
+                    bytes_sent: 0,
+                    bytes_received: 0,
                 },
                 dialed: None,
                 udp: HashMap::new(),
