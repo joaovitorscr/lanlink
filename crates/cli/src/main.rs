@@ -117,11 +117,12 @@ async fn main() -> anyhow::Result<()> {
                 "{} forwarded to {}; ctrl-c to stop",
                 service, tunnel.local_addr
             );
-            let mut last = (info.state, info.latency_ms);
+            let mut last_state = info.state;
             run_until_ctrl_c(&mut events, |ev| match ev {
                 NodeEvent::PeerStateChanged(p) if p.id == node_id => {
-                    if (p.state, p.latency_ms) != last {
-                        last = (p.state, p.latency_ms);
+                    // Print on path changes, plus a stats summary every 10 pings.
+                    if p.state != last_state || (p.stats.total > 0 && p.stats.total % 10 == 0) {
+                        last_state = p.state;
                         print_peer(&p);
                     }
                 }
@@ -165,9 +166,23 @@ fn print_peer(p: &PeerInfo) {
         .name
         .clone()
         .unwrap_or_else(|| p.id.fmt_short().to_string());
-    match p.latency_ms {
-        Some(ms) => println!("{name}: {} ({ms} ms)", state_str(p.state)),
-        None => println!("{name}: {}", state_str(p.state)),
+    let st = p.stats;
+    if st.samples > 0 {
+        println!(
+            "{name}: {}  last {:.1}  min {:.1}  avg {:.1}  max {:.1}  jitter {:.1} ms  ({} samples)",
+            state_str(p.state),
+            st.last_ms,
+            st.min_ms,
+            st.avg_ms,
+            st.max_ms,
+            st.jitter_ms,
+            st.samples
+        );
+    } else {
+        match p.latency_ms {
+            Some(ms) => println!("{name}: {} ({ms} ms)", state_str(p.state)),
+            None => println!("{name}: {}", state_str(p.state)),
+        }
     }
 }
 

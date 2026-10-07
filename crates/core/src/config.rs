@@ -36,7 +36,11 @@ pub struct Config {
 
 impl Config {
     /// Platform config dir, e.g. ~/.config/lanlink or %APPDATA%\lanlink.
+    /// Set `LANLINK_CONFIG_DIR` to use a different folder, e.g. for tests or a second instance.
     pub fn dir() -> PathBuf {
+        if let Some(d) = std::env::var_os("LANLINK_CONFIG_DIR") {
+            return PathBuf::from(d);
+        }
         dirs::config_dir()
             .unwrap_or_else(|| PathBuf::from("."))
             .join("lanlink")

@@ -28,6 +28,10 @@ async fn tcp_round_trip() -> anyhow::Result<()> {
         }
     });
 
+    // Keep test nodes away from the user's real config and latency log.
+    let dir = std::env::temp_dir().join(format!("lanlink-test-{}", std::process::id()));
+    std::env::set_var("LANLINK_CONFIG_DIR", &dir);
+
     let host_key = SecretKey::generate();
     let client_key = SecretKey::generate();
     let host_id = host_key.public();

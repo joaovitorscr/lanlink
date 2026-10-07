@@ -13,7 +13,11 @@ use tracing::info;
 use tracing_subscriber::EnvFilter;
 
 #[derive(Debug, Parser)]
-#[command(name = "lanlink-relay", version, about = "Self-hosted iroh relay for lanlink")]
+#[command(
+    name = "lanlink-relay",
+    version,
+    about = "Self-hosted iroh relay for lanlink"
+)]
 struct Cli {
     /// Plain HTTP listener. Serves the relay itself when no TLS is configured
     /// (e.g. behind a reverse proxy); otherwise only the captive-portal probe.

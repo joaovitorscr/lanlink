@@ -1,5 +1,6 @@
 use crate::forward::{self, UdpClient};
 use crate::protocol::{decode_datagram, encode_datagram, read_msg, write_msg, ControlMsg};
+use crate::stats::{LatencyLog, LatencyStats, LatencyWindow};
 use crate::NodeId;
 use crate::{ActiveTunnel, Config, Protocol, Service, ALPN};
 use anyhow::{bail, Context};
@@ -15,7 +16,8 @@ use tokio::net::{TcpListener, UdpSocket};
 use tokio::sync::broadcast;
 use tokio::task::{AbortHandle, JoinSet};
 
-const PING_INTERVAL: Duration = Duration::from_secs(5);
+/// 1s pings give a useful latency history at negligible cost (a few bytes per second).
+const PING_INTERVAL: Duration = Duration::from_secs(1);
 const PATH_POLL_INTERVAL: Duration = Duration::from_secs(1);
 const EVENT_CAPACITY: usize = 64;
 const CLOSE_NOT_ALLOWED: u32 = 1;
@@ -37,6 +39,8 @@ pub struct PeerInfo {
     pub name: Option<String>,
     pub state: ConnState,
     pub latency_ms: Option<u32>,
+    /// Rolling latency stats over the last minute of pings. Default until the first pong.
+    pub stats: LatencyStats,
     /// Services the peer advertises to us (learned on connect).
     pub services: Vec<Service>,
 }
@@ -61,6 +65,8 @@ struct PeerEntry {
     dialed: Option<Connection>,
     /// Client UDP tunnels on the dialed connection, keyed by remote service index.
     udp: HashMap<u16, UdpClient>,
+    /// Recent ping samples backing `info.stats`.
+    latency: LatencyWindow,
 }
 
 struct TunnelEntry {
@@ -78,6 +84,7 @@ struct Inner {
     tasks: Mutex<Vec<AbortHandle>>,
     dial_lock: tokio::sync::Mutex<()>,
     epoch: Instant,
+    latency_log: Mutex<LatencyLog>,
 }
 
 /// Load the persistent identity from `path`, creating it (mode 0600) if missing.
@@ -161,6 +168,7 @@ impl Node {
             tasks: Mutex::new(Vec::new()),
             dial_lock: tokio::sync::Mutex::new(()),
             epoch: Instant::now(),
+            latency_log: Mutex::new(LatencyLog::open(&Config::dir().join("latency.csv"))),
         });
         let node = Node { inner };
         let n = node.clone();
@@ -228,6 +236,7 @@ impl Node {
                     name: config.peer_names.get(s).cloned(),
                     state: ConnState::Disconnected,
                     latency_ms: None,
+                    stats: LatencyStats::default(),
                     services: Vec::new(),
                 });
             }
@@ -394,14 +403,17 @@ impl Node {
                     name: name.clone(),
                     state: ConnState::Disconnected,
                     latency_ms: None,
+                    stats: LatencyStats::default(),
                     services: Vec::new(),
                 },
                 dialed: None,
                 udp: HashMap::new(),
+                latency: LatencyWindow::default(),
             });
             let before = (
                 entry.info.state,
                 entry.info.latency_ms,
+                entry.info.stats.total,
                 entry.info.services.len(),
                 entry.info.name.clone(),
             );
@@ -412,6 +424,7 @@ impl Node {
             let after = (
                 entry.info.state,
                 entry.info.latency_ms,
+                entry.info.stats.total,
                 entry.info.services.len(),
                 entry.info.name.clone(),
             );
@@ -419,6 +432,23 @@ impl Node {
         };
         if let Some(info) = changed {
             self.emit(NodeEvent::PeerStateChanged(info));
+        }
+    }
+
+    /// Record one ping round trip: update rolling stats, emit a peer event, append to latency.csv.
+    fn record_latency(&self, id: NodeId, rtt_ms: f32) {
+        let mut snapshot = None;
+        self.update_peer(id, |e| {
+            e.info.stats = e.latency.push(rtt_ms);
+            e.info.latency_ms = Some(rtt_ms.round() as u32);
+            snapshot = Some((e.info.name.clone(), e.info.state));
+        });
+        if let Some((name, state)) = snapshot {
+            self.inner
+                .latency_log
+                .lock()
+                .unwrap()
+                .record(&id, name.as_deref(), state, rtt_ms);
         }
     }
 
@@ -558,8 +588,8 @@ impl Node {
                         }
                         ControlMsg::Pong(t) => {
                             let now = n.inner.epoch.elapsed().as_micros() as u64;
-                            let ms = (now.saturating_sub(t) / 1000) as u32;
-                            n.update_peer(peer, |e| e.info.latency_ms = Some(ms));
+                            let rtt_ms = now.saturating_sub(t) as f32 / 1000.0;
+                            n.record_latency(peer, rtt_ms);
                         }
                         ControlMsg::Services(s) => n.update_peer(peer, |e| e.info.services = s),
                         ControlMsg::Hello { .. } => {}
@@ -686,10 +716,14 @@ impl Node {
                     e.udp.clear();
                     e.info.state = ConnState::Disconnected;
                     e.info.latency_ms = None;
+                    e.info.stats = LatencyStats::default();
+                    e.latency.clear();
                 }
             } else if e.dialed.is_none() {
                 e.info.state = ConnState::Disconnected;
                 e.info.latency_ms = None;
+                e.info.stats = LatencyStats::default();
+                e.latency.clear();
             }
         });
     }

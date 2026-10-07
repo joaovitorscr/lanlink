@@ -15,10 +15,12 @@ pub mod config;
 pub mod forward;
 pub mod node;
 pub mod protocol;
+pub mod stats;
 
 pub use config::{Config, Protocol, Service};
 pub use iroh::{EndpointId as NodeId, SecretKey};
 pub use node::{ConnState, Node, NodeEvent, PeerInfo};
+pub use stats::LatencyStats;
 
 use std::net::SocketAddr;
 

@@ -9,7 +9,9 @@ use gpui::{
     FocusHandle, Hsla, KeyDownEvent, MouseButton, SharedString, Window, WindowBounds,
     WindowOptions,
 };
-use lanlink_core::{ActiveTunnel, Config, ConnState, Node, NodeEvent, NodeId, PeerInfo, Protocol, Service};
+use lanlink_core::{
+    ActiveTunnel, Config, ConnState, Node, NodeEvent, NodeId, PeerInfo, Protocol, Service,
+};
 use tokio::sync::{broadcast, mpsc};
 
 const BG: u32 = 0x16181d;
@@ -38,7 +40,11 @@ struct TextInput {
 
 impl TextInput {
     fn new(placeholder: &'static str, cx: &mut App) -> Self {
-        Self { text: String::new(), placeholder, focus: cx.focus_handle() }
+        Self {
+            text: String::new(),
+            placeholder,
+            focus: cx.focus_handle(),
+        }
     }
 
     fn handle_key(&mut self, ev: &KeyDownEvent, cx: &mut App) {
@@ -210,7 +216,9 @@ impl AppState {
         F: FnOnce(Node) -> Fut + Send + 'static,
         Fut: Future<Output = anyhow::Result<()>> + Send + 'static,
     {
-        let Some(node) = self.node.clone() else { return };
+        let Some(node) = self.node.clone() else {
+            return;
+        };
         let tx = self.tx.clone();
         self.rt.spawn(async move {
             let res = tokio::spawn(f(node)).await;
@@ -229,7 +237,11 @@ impl AppState {
     }
 
     fn connect_service(&mut self, peer: NodeId, svc: Service) {
-        let local = if port_free(svc.port, svc.protocol) { svc.port } else { 0 };
+        let local = if port_free(svc.port, svc.protocol) {
+            svc.port
+        } else {
+            0
+        };
         let addr = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, local));
         let tx = self.tx.clone();
         self.run(move |n| async move {
@@ -283,10 +295,18 @@ impl AppState {
             return;
         }
         self.svc_port.take();
-        let protocol = if self.svc_udp { Protocol::Udp } else { Protocol::Tcp };
+        let protocol = if self.svc_udp {
+            Protocol::Udp
+        } else {
+            Protocol::Tcp
+        };
         let mut config = self.config.clone();
         config.services.retain(|s| s.name != name);
-        config.services.push(Service { name, protocol, port });
+        config.services.push(Service {
+            name,
+            protocol,
+            port,
+        });
         self.save_config(config);
     }
 
@@ -307,7 +327,12 @@ impl AppState {
 
     // ---- rendering ----
 
-    fn render_input(&mut self, f: Field, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_input(
+        &mut self,
+        f: Field,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
         let input = self.input_mut(f);
         let focused = input.focus.is_focused(window);
         let focus = input.focus.clone();
@@ -356,7 +381,21 @@ impl AppState {
             ConnState::Relayed => ("Relayed", 0xf97316),
             ConnState::Direct => ("Direct", 0x22c55e),
         };
-        let latency = p.latency_ms.map(|ms| format!("{ms} ms")).unwrap_or_default();
+        let st = p.stats;
+        let latency = if st.samples > 0 {
+            format!("{:.1} ms", st.last_ms)
+        } else {
+            p.latency_ms
+                .map(|ms| format!("{ms} ms"))
+                .unwrap_or_default()
+        };
+        // Rolling stats over the last minute of 1s pings.
+        let stats_line = (st.samples > 0).then(|| {
+            format!(
+                "last {}s  min {:.1}  avg {:.1}  max {:.1}  jitter {:.1} ms",
+                st.samples, st.min_ms, st.avg_ms, st.max_ms, st.jitter_ms
+            )
+        });
         let peer = p.id;
         div()
             .flex()
@@ -382,17 +421,27 @@ impl AppState {
                             .child(label),
                     ),
             )
+            .when_some(stats_line, |el, line| {
+                el.child(div().text_xs().text_color(rgb(MUTED)).child(line))
+            })
             .children(p.services.iter().enumerate().map(|(si, s)| {
                 let svc = s.clone();
                 row()
                     .text_color(rgb(MUTED))
-                    .child(div().flex_1().child(format!("{} · {} {}", s.name, proto(s.protocol), s.port)))
-                    .child(button(id("connect", ix * 1000 + si), "Connect", ACCENT).on_click(cx.listener(
-                        move |this, _, _, cx| {
-                            this.connect_service(peer, svc.clone());
-                            cx.notify();
-                        },
+                    .child(div().flex_1().child(format!(
+                        "{} · {} {}",
+                        s.name,
+                        proto(s.protocol),
+                        s.port
                     )))
+                    .child(
+                        button(id("connect", ix * 1000 + si), "Connect", ACCENT).on_click(
+                            cx.listener(move |this, _, _, cx| {
+                                this.connect_service(peer, svc.clone());
+                                cx.notify();
+                            }),
+                        ),
+                    )
             }))
     }
 }
@@ -433,8 +482,18 @@ impl Render for AppState {
             });
 
         // Peers
-        let peers = section("Peers").children(self.peers.clone().iter().enumerate().map(|(ix, p)| self.render_peer(ix, p, cx)));
-        let peers = if self.peers.is_empty() { peers.child(empty("No peers yet")) } else { peers };
+        let peers = section("Peers").children(
+            self.peers
+                .clone()
+                .iter()
+                .enumerate()
+                .map(|(ix, p)| self.render_peer(ix, p, cx)),
+        );
+        let peers = if self.peers.is_empty() {
+            peers.child(empty("No peers yet"))
+        } else {
+            peers
+        };
 
         // Add peer
         let add_peer = section("Add peer")
@@ -442,10 +501,12 @@ impl Render for AppState {
             .child(
                 row()
                     .child(self.render_input(Field::PeerName, window, cx))
-                    .child(button("add-peer", "Add", ACCENT).on_click(cx.listener(|this, _, _, cx| {
-                        this.add_peer();
-                        cx.notify();
-                    }))),
+                    .child(button("add-peer", "Add", ACCENT).on_click(cx.listener(
+                        |this, _, _, cx| {
+                            this.add_peer();
+                            cx.notify();
+                        },
+                    ))),
             );
 
         // My services
@@ -454,18 +515,28 @@ impl Render for AppState {
                 let name = s.name.clone();
                 row()
                     .child(div().flex_1().child(s.name.clone()))
-                    .child(div().text_color(rgb(MUTED)).child(format!("{} {}", proto(s.protocol), s.port)))
-                    .child(button(id("rm-svc", ix), "Remove", DANGER).on_click(cx.listener(
-                        move |this, _, _, cx| {
-                            this.remove_service(name.clone());
-                            cx.notify();
-                        },
+                    .child(div().text_color(rgb(MUTED)).child(format!(
+                        "{} {}",
+                        proto(s.protocol),
+                        s.port
                     )))
+                    .child(
+                        button(id("rm-svc", ix), "Remove", DANGER).on_click(cx.listener(
+                            move |this, _, _, cx| {
+                                this.remove_service(name.clone());
+                                cx.notify();
+                            },
+                        )),
+                    )
             }))
             .child(
                 row()
                     .child(self.render_input(Field::SvcName, window, cx))
-                    .child(div().w(px(70.)).flex().child(self.render_input(Field::SvcPort, window, cx)))
+                    .child(div().w(px(70.)).flex().child(self.render_input(
+                        Field::SvcPort,
+                        window,
+                        cx,
+                    )))
                     .child(
                         button("proto", if self.svc_udp { "UDP" } else { "TCP" }, BORDER).on_click(
                             cx.listener(|this, _, _, cx| {
@@ -474,29 +545,40 @@ impl Render for AppState {
                             }),
                         ),
                     )
-                    .child(button("add-svc", "Add", ACCENT).on_click(cx.listener(|this, _, _, cx| {
-                        this.add_service();
-                        cx.notify();
-                    }))),
+                    .child(button("add-svc", "Add", ACCENT).on_click(cx.listener(
+                        |this, _, _, cx| {
+                            this.add_service();
+                            cx.notify();
+                        },
+                    ))),
             );
 
         // Active tunnels
-        let tunnels = section("Active tunnels").children(self.tunnels.iter().enumerate().map(|(ix, t)| {
-            let tunnel = t.clone();
-            row()
-                .child(div().flex_1().child(t.service.clone()))
-                .child(div().text_color(rgb(MUTED)).child(t.local_addr.to_string()))
-                .child(button(id("close", ix), "Close", DANGER).on_click(cx.listener(
-                    move |this, _, _, cx| {
-                        this.close_tunnel(tunnel.clone());
-                        cx.notify();
-                    },
-                )))
-        }));
-        let tunnels = if self.tunnels.is_empty() { tunnels.child(empty("No active tunnels")) } else { tunnels };
+        let tunnels =
+            section("Active tunnels").children(self.tunnels.iter().enumerate().map(|(ix, t)| {
+                let tunnel = t.clone();
+                row()
+                    .child(div().flex_1().child(t.service.clone()))
+                    .child(div().text_color(rgb(MUTED)).child(t.local_addr.to_string()))
+                    .child(
+                        button(id("close", ix), "Close", DANGER).on_click(cx.listener(
+                            move |this, _, _, cx| {
+                                this.close_tunnel(tunnel.clone());
+                                cx.notify();
+                            },
+                        )),
+                    )
+            }));
+        let tunnels = if self.tunnels.is_empty() {
+            tunnels.child(empty("No active tunnels"))
+        } else {
+            tunnels
+        };
 
         root.child(header)
-            .when_some(self.status.clone(), |el, s| el.child(div().text_color(rgb(MUTED)).child(s)))
+            .when_some(self.status.clone(), |el, s| {
+                el.child(div().text_color(rgb(MUTED)).child(s))
+            })
             .child(peers)
             .child(add_peer)
             .child(services)
@@ -518,7 +600,12 @@ fn section(title: &'static str) -> gpui::Div {
         .bg(rgb(PANEL))
         .border_1()
         .border_color(rgb(BORDER))
-        .child(div().text_xs().text_color(rgb(MUTED)).child(title.to_uppercase()))
+        .child(
+            div()
+                .text_xs()
+                .text_color(rgb(MUTED))
+                .child(title.to_uppercase()),
+        )
 }
 
 fn empty(text: &'static str) -> impl IntoElement {
