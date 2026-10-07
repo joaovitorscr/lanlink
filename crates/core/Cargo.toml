@@ -12,3 +12,7 @@ serde_json.workspace = true
 tracing.workspace = true
 iroh.workspace = true
 dirs.workspace = true
+bytes = "1"
+
+[dev-dependencies]
+iroh.workspace = true

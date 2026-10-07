@@ -3739,6 +3739,7 @@ name = "lanlink-core"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "bytes",
  "dirs 6.0.0",
  "iroh",
  "serde",

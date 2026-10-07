@@ -1,3 +1,4 @@
+use anyhow::Context;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
@@ -36,12 +37,26 @@ pub struct Config {
 impl Config {
     /// Platform config dir, e.g. ~/.config/lanlink or %APPDATA%\lanlink.
     pub fn dir() -> PathBuf {
-        todo!("implement")
+        dirs::config_dir()
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join("lanlink")
     }
     pub fn load() -> anyhow::Result<Config> {
-        todo!("implement: load config.json from dir(), default if missing")
+        let path = Self::dir().join("config.json");
+        match std::fs::read(&path) {
+            Ok(bytes) => serde_json::from_slice(&bytes)
+                .with_context(|| format!("parsing {}", path.display())),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Config::default()),
+            Err(e) => Err(e).with_context(|| format!("reading {}", path.display())),
+        }
     }
     pub fn save(&self) -> anyhow::Result<()> {
-        todo!("implement")
+        let dir = Self::dir();
+        std::fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
+        let path = dir.join("config.json");
+        let tmp = dir.join("config.json.tmp");
+        std::fs::write(&tmp, serde_json::to_vec_pretty(self)?)?;
+        std::fs::rename(&tmp, &path).with_context(|| format!("writing {}", path.display()))?;
+        Ok(())
     }
 }

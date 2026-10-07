@@ -12,13 +12,13 @@
 //! - Latency: TCP_NODELAY on local sockets, small buffers, no extra framing on TCP streams.
 
 pub mod config;
-pub mod node;
 pub mod forward;
+pub mod node;
 pub mod protocol;
 
 pub use config::{Config, Protocol, Service};
-pub use node::{ConnState, Node, NodeEvent, PeerInfo};
 pub use iroh::{EndpointId as NodeId, SecretKey};
+pub use node::{ConnState, Node, NodeEvent, PeerInfo};
 
 use std::net::SocketAddr;
 
