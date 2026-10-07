@@ -1,0 +1,15 @@
+[package]
+name = "lanlink-relay"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "lanlink-relay"
+path = "src/main.rs"
+
+[dependencies]
+tokio.workspace = true
+anyhow.workspace = true
+clap.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true

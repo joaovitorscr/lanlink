@@ -1,0 +1,16 @@
+[package]
+name = "lanlink-cli"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "lanlink"
+path = "src/main.rs"
+
+[dependencies]
+lanlink-core = { path = "../core" }
+tokio.workspace = true
+anyhow.workspace = true
+clap.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
