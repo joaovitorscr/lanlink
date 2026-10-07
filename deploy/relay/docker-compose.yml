@@ -1,0 +1,27 @@
+# Relay on plain HTTP behind Caddy, which terminates TLS on 443.
+services:
+  relay:
+    build:
+      context: ../..
+      dockerfile: deploy/relay/Dockerfile
+    restart: unless-stopped
+    command: ["--http-addr", "0.0.0.0:3340"]
+    environment:
+      RUST_LOG: info
+
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      RELAY_DOMAIN: relay.example.com
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+    depends_on:
+      - relay
+
+volumes:
+  caddy_data:
