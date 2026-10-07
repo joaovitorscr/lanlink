@@ -3823,6 +3823,7 @@ dependencies = [
  "anyhow",
  "gpui",
  "lanlink-core",
+ "open",
  "tokio",
  "tracing",
  "tracing-subscriber",
