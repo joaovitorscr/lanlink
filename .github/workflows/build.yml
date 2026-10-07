@@ -1,0 +1,92 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+      - uses: Swatinem/rust-cache@v2
+      - name: Build
+        run: cargo build --release --target x86_64-pc-windows-msvc -p lanlink-app -p lanlink-cli
+      - name: Package
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist | Out-Null
+          $out = "target/x86_64-pc-windows-msvc/release"
+          Copy-Item "$out/lanlink-app.exe" dist/lanlink.exe
+          Copy-Item "$out/lanlink.exe" dist/lanlink-cli.exe
+          Compress-Archive -Path dist/lanlink.exe, dist/lanlink-cli.exe -DestinationPath lanlink-windows-x64.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: lanlink-windows-x64
+          path: lanlink-windows-x64.zip
+
+  macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin
+      - uses: Swatinem/rust-cache@v2
+      - name: Build
+        run: cargo build --release --target aarch64-apple-darwin -p lanlink-app -p lanlink-cli
+      - name: Package
+        run: |
+          mkdir -p dist
+          out=target/aarch64-apple-darwin/release
+          cp "$out/lanlink-app" dist/lanlink-app
+          cp "$out/lanlink" dist/lanlink
+          (cd dist && zip -9 ../lanlink-macos-arm64.zip lanlink-app lanlink)
+      - uses: actions/upload-artifact@v4
+        with:
+          name: lanlink-macos-arm64
+          path: lanlink-macos-arm64.zip
+
+  linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Test core
+        run: cargo test -p lanlink-core
+      - name: Clippy
+        run: cargo clippy --workspace --exclude lanlink-app -- -D warnings
+      - name: Build relay
+        run: cargo build --release -p lanlink-relay
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [windows, macos, linux]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            artifacts/lanlink-windows-x64.zip
+            artifacts/lanlink-macos-arm64.zip
+          generate_release_notes: true
