@@ -44,17 +44,27 @@ enum Cmd {
     },
     /// List allowed peers.
     Peers,
+    /// Run briefly and list peers that asked to connect to us.
+    Requests {
+        /// How long to listen for requests, in seconds.
+        #[arg(long, default_value_t = 15)]
+        secs: u64,
+    },
+    /// Allow a peer that asked to connect (same as `allow`).
+    Accept {
+        node_id: NodeId,
+        #[arg(long)]
+        name: Option<String>,
+    },
+    /// Remove a peer from the allowlist, names and saved tunnels.
+    Remove { node_id: NodeId },
+    /// Set the local display name of a peer.
+    Rename { node_id: NodeId, name: String },
 }
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "warn,lanlink_core=info".into()),
-        )
-        .with_writer(std::io::stderr)
-        .init();
+    let _log = lanlink_core::init_logging("cli");
 
     let cli = Cli::parse();
     let mut config = Config::load()?;
@@ -64,7 +74,7 @@ async fn main() -> anyhow::Result<()> {
                 lanlink_core::node::load_or_create_secret_key(&Config::dir().join("identity.key"))?;
             println!("{}", key.public());
         }
-        Cmd::Allow { node_id, name } => {
+        Cmd::Allow { node_id, name } | Cmd::Accept { node_id, name } => {
             let id = node_id.to_string();
             if !config.allowed_peers.contains(&id) {
                 config.allowed_peers.push(id.clone());
@@ -85,6 +95,54 @@ async fn main() -> anyhow::Result<()> {
                     None => println!("{p}"),
                 }
             }
+        }
+        Cmd::Remove { node_id } => {
+            let id = node_id.to_string();
+            let before = config.allowed_peers.len();
+            config.allowed_peers.retain(|p| p != &id);
+            config.peer_names.remove(&id);
+            config.saved_tunnels.retain(|t| t.peer != id);
+            config.save()?;
+            if config.allowed_peers.len() < before {
+                println!("removed {id}");
+            } else {
+                println!("{id} was not in the allowlist");
+            }
+        }
+        Cmd::Rename { node_id, name } => {
+            let id = node_id.to_string();
+            config.peer_names.insert(id.clone(), name.clone());
+            config.save()?;
+            println!("{id} is now {name}");
+        }
+        Cmd::Requests { secs } => {
+            let node = Node::start(config).await?;
+            println!("node id: {}", node.id());
+            println!("listening for connection requests for {secs}s; ctrl-c to stop early");
+            let mut events = node.subscribe();
+            let _ = tokio::time::timeout(
+                std::time::Duration::from_secs(secs),
+                run_until_ctrl_c(&mut events, |ev| {
+                    if let NodeEvent::PeerRequest(r) = ev {
+                        println!(
+                            "request from {} ({})",
+                            r.id,
+                            r.name.as_deref().unwrap_or("no name")
+                        );
+                    }
+                }),
+            )
+            .await;
+            let reqs = node.pending_requests();
+            if reqs.is_empty() {
+                println!("no pending requests");
+            } else {
+                println!("pending requests (accept with `lanlink accept <id> --name <name>`):");
+                for r in reqs {
+                    println!("{}  {}", r.id, r.name.as_deref().unwrap_or("-"));
+                }
+            }
+            node.shutdown().await?;
         }
         Cmd::Host { name, port, udp } => {
             let protocol = if udp { Protocol::Udp } else { Protocol::Tcp };
@@ -179,7 +237,10 @@ fn print_peer(p: &PeerInfo) {
     } else {
         match p.latency_ms {
             Some(ms) => println!("{name}: {} ({ms} ms)", state_str(p.state)),
-            None => println!("{name}: {}", state_str(p.state)),
+            None => match &p.last_error {
+                Some(e) => println!("{name}: {} ({e})", state_str(p.state)),
+                None => println!("{name}: {}", state_str(p.state)),
+            },
         }
     }
 }
@@ -190,7 +251,12 @@ fn print_event(ev: &NodeEvent) {
         NodeEvent::TunnelOpened(t) => println!("tunnel opened: {} -> {}", t.local_addr, t.service),
         NodeEvent::TunnelClosed(t) => println!("tunnel closed: {} -> {}", t.local_addr, t.service),
         NodeEvent::Error(e) => eprintln!("error: {e}"),
-        NodeEvent::PeerRequest(r) => println!("connection request from {}", r.id),
+        NodeEvent::PeerRequest(r) => println!(
+            "connection request from {} ({}); allow with `lanlink accept {}`",
+            r.name.as_deref().unwrap_or("no name"),
+            r.id,
+            r.id
+        ),
         NodeEvent::NetworkChanged(_) | NodeEvent::LanWorldsChanged(_) => {}
     }
 }
