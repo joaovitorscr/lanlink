@@ -14,6 +14,7 @@
 pub mod api;
 pub mod config;
 pub mod forward;
+pub mod lan;
 pub mod node;
 pub mod protocol;
 pub mod stats;

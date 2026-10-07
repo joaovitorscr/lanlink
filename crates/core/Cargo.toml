@@ -13,6 +13,10 @@ tracing.workspace = true
 iroh.workspace = true
 dirs.workspace = true
 bytes = "1"
+tracing-subscriber.workspace = true
+tracing-appender = "0.2"
+socket2 = { version = "0.6", features = ["all"] }
+gethostname = "1"
 
 [dev-dependencies]
 iroh.workspace = true
