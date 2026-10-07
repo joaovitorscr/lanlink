@@ -27,8 +27,8 @@ fn init_logging() -> Option<lanlink_core::LogGuard> {
 }
 
 fn main() {
-    let _log_guard = init_logging();
     // Panics from core calls are caught and shown in the UI; log them instead of printing.
+    // Installed before logging so a todo!() in init_logging stays quiet too.
     std::panic::set_hook(Box::new(|info| {
         tracing::warn!(
             "panic: {} at {}",
@@ -36,6 +36,7 @@ fn main() {
             info.location().map(|l| l.to_string()).unwrap_or_default()
         );
     }));
+    let _log_guard = init_logging();
 
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
