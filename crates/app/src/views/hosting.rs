@@ -51,7 +51,7 @@ impl Root {
                     .child(glabel(&t, "Shared").flex_1())
                     .child(
                         button(&t, "add-svc", Some("plus"), "Add service", ButtonKind::Secondary)
-                            .mt_3()
+                            .mt_3().mb_1p5()
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.open_sheet(Sheet::AddService, cx)
                             })),
