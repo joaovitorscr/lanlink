@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::net::{Ipv4Addr, TcpListener, UdpSocket};
 use std::time::{Duration, Instant};
@@ -6,8 +6,9 @@ use std::time::{Duration, Instant};
 use gpui::{AppContext, Context, Entity, PathPromptOptions, Pixels, Point, Subscription};
 use lanlink_core::export::{self, Import, ImportMode};
 use lanlink_core::{
-    ActiveTunnel, Config, ImportOutcome, LanWorld, NetworkStatus, Node, NodeEvent, NodeId,
-    PeerInfo, PeerRequest, Protocol, Service, ServiceStatus, TunnelInfo,
+    ActiveTunnel, Approval, Config, ImportOutcome, InviteExpiry, JoinStatus, LanWorld, Network,
+    NetworkColor, NetworkPolicy, NetworkStatus, Node, NodeEvent, NodeId, PeerInfo, PeerRequest,
+    Protocol, Service, ServiceStatus, TunnelInfo,
 };
 use tokio::sync::{broadcast, mpsc};
 
@@ -30,15 +31,94 @@ pub enum Sheet {
     RemoveService(String),
     /// Confirm the file in `Root::pending_import`.
     Import,
+    NewNetwork,
+    JoinNetwork,
+    /// Invite code of a network (by id).
+    Invite(String),
+    RenameNetwork(String),
+    RemoveMember(String, NodeId),
+    LeaveNetwork(String),
+    DeleteNetwork(String),
 }
 
 /// Which popover menu is open.
 #[derive(Clone, PartialEq, Eq)]
 pub enum MenuKind {
+    /// A direct peer (outside any network).
     Peer(NodeId),
+    /// A member row of a network: (network id, member).
+    Member(String, NodeId),
+    Network(String),
     Service(String),
     Protocol,
     Appearance,
+    NewNetWho,
+    NewNetExpiry,
+    InviteExpiry(String),
+    InviteApproval(String),
+}
+
+/// Who can join a new network ("Who can join" in the New Network sheet).
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum WhoCanJoin {
+    Anyone,
+    Approved,
+    NoCode,
+}
+
+impl WhoCanJoin {
+    pub const ALL: [WhoCanJoin; 3] = [WhoCanJoin::Anyone, WhoCanJoin::Approved, WhoCanJoin::NoCode];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            WhoCanJoin::Anyone => "Anyone with the code",
+            WhoCanJoin::Approved => "Only people I approve",
+            WhoCanJoin::NoCode => "Invite only, no code",
+        }
+    }
+}
+
+/// Choices of the New Network sheet besides the name.
+pub struct NewNetwork {
+    pub color: NetworkColor,
+    pub who: WhoCanJoin,
+    pub expires: InviteExpiry,
+    pub policy: NetworkPolicy,
+}
+
+impl Default for NewNetwork {
+    fn default() -> Self {
+        Self {
+            color: NetworkColor::Green,
+            who: WhoCanJoin::Anyone,
+            expires: InviteExpiry::Never,
+            policy: NetworkPolicy::default(),
+        }
+    }
+}
+
+/// Expiry choices offered in the UI.
+pub const EXPIRY_CHOICES: [InviteExpiry; 4] = [
+    InviteExpiry::Never,
+    InviteExpiry::AfterHours { hours: 1 },
+    InviteExpiry::AfterHours { hours: 24 },
+    InviteExpiry::FirstUse,
+];
+
+pub fn expiry_label(e: InviteExpiry) -> String {
+    match e {
+        InviteExpiry::Never => "Never".into(),
+        InviteExpiry::AfterHours { hours: 1 } => "After 1 hour".into(),
+        InviteExpiry::AfterHours { hours } => format!("After {hours} hours"),
+        InviteExpiry::FirstUse => "After first use".into(),
+    }
+}
+
+pub fn approval_label(a: Approval) -> &'static str {
+    match a {
+        Approval::AskMe => "Ask me first",
+        Approval::Auto => "Auto-approve",
+    }
 }
 
 pub struct OpenMenu {
@@ -53,6 +133,7 @@ pub enum Msg {
     StartFailed(String),
     Event(NodeEvent),
     Resync,
+    OpenSheet(Sheet),
     Error(String),
     Info(String),
     RelaySaved(bool),
@@ -137,6 +218,9 @@ pub struct Inputs {
     pub display_name: Entity<TextInput>,
     pub relay_url: Entity<TextInput>,
     pub rename: Entity<TextInput>,
+    pub net_name: Entity<TextInput>,
+    pub join_code: Entity<TextInput>,
+    pub join_name: Entity<TextInput>,
 }
 
 pub struct Root {
@@ -158,6 +242,9 @@ pub struct Root {
     pub inputs: Inputs,
     pub svc_protocol: Protocol,
     pub svc_minecraft: bool,
+    pub new_network: NewNetwork,
+    /// Networks whose member list is folded away (this session only).
+    pub collapsed: HashSet<String>,
     pub sheet: Option<Sheet>,
     pub pending_import: Option<PendingImport>,
     pub menu: Option<OpenMenu>,
@@ -244,6 +331,9 @@ impl Root {
             display_name: input("Your name", cx),
             relay_url: input("https://relay.example.com (empty = default)", cx),
             rename: input("Name", cx),
+            net_name: input("e.g. Friday squad", cx),
+            join_code: input("lanlink-…", cx),
+            join_name: input("Your name", cx),
         };
         let subscriptions = vec![
             submit(&inputs.peer_id, cx, Self::add_peer),
@@ -254,6 +344,9 @@ impl Root {
             submit(&inputs.display_name, cx, Self::save_display_name),
             submit(&inputs.relay_url, cx, Self::save_relay_url),
             submit(&inputs.rename, cx, Self::finish_rename),
+            submit(&inputs.net_name, cx, Self::create_network),
+            submit(&inputs.join_code, cx, Self::join_network),
+            submit(&inputs.join_name, cx, Self::join_network),
         ];
 
         Self {
@@ -275,6 +368,8 @@ impl Root {
             inputs,
             svc_protocol: Protocol::Tcp,
             svc_minecraft: false,
+            new_network: NewNetwork::default(),
+            collapsed: HashSet::new(),
             sheet: None,
             pending_import: None,
             menu: None,
@@ -302,13 +397,22 @@ impl Root {
                 NodeEvent::TunnelOpened(_) | NodeEvent::TunnelClosed(_) => {}
                 NodeEvent::Error(e) => self.show_error(e, cx),
                 NodeEvent::PeerRequest(r) => {
-                    self.requests.retain(|x| x.id != r.id);
+                    self.requests
+                        .retain(|x| !(x.id == r.id && x.network == r.network));
                     self.requests.insert(0, r);
+                    // Join requests are stored in the config.
+                    self.resync();
                 }
                 NodeEvent::NetworkChanged(n) => self.network = n,
                 NodeEvent::LanWorldsChanged(w) => self.worlds = w,
+                NodeEvent::NetworksChanged => self.resync(),
             },
             Msg::Resync => self.resync(),
+            Msg::OpenSheet(sheet) => {
+                self.resync();
+                self.menu = None;
+                self.sheet = Some(sheet);
+            }
             Msg::Error(e) => self.show_error(e, cx),
             Msg::Info(s) => self.show_toast(s, false, cx),
             Msg::RelaySaved(restart) => {
@@ -541,9 +645,16 @@ impl Root {
         cx.notify();
     }
 
-    pub fn respond_request(&mut self, id: NodeId, allow: bool, cx: &mut Context<Self>) {
-        self.requests.retain(|r| r.id != id);
-        self.run(move |n| async move { n.respond_request(id, allow, None).await });
+    pub fn respond_request(&mut self, req: PeerRequest, allow: bool, cx: &mut Context<Self>) {
+        self.requests
+            .retain(|r| !(r.id == req.id && r.network == req.network));
+        let id = req.id;
+        match req.network {
+            Some(net) => {
+                self.run(move |n| async move { n.respond_join(&net, id, allow).await });
+            }
+            None => self.run(move |n| async move { n.respond_request(id, allow, None).await }),
+        }
         cx.notify();
     }
 
@@ -562,11 +673,152 @@ impl Root {
     }
 
     pub fn finish_rename(&mut self, cx: &mut Context<Self>) {
-        let Some(Sheet::RenamePeer(id)) = self.sheet.take() else {
-            return;
+        match self.sheet.take() {
+            Some(Sheet::RenamePeer(id)) => {
+                let name = non_empty(self.inputs.rename.update(cx, |i, cx| i.take(cx)));
+                self.run(move |n| async move { n.rename_peer(id, name).await });
+            }
+            Some(Sheet::RenameNetwork(net)) => {
+                let name = self.inputs.rename.update(cx, |i, cx| i.take(cx));
+                self.run(move |n| async move { n.rename_network(&net, name.trim()).await });
+            }
+            other => self.sheet = other,
+        }
+        cx.notify();
+    }
+
+    // ---- networks ----
+
+    pub fn network(&self, id: &str) -> Option<&Network> {
+        self.config.networks.iter().find(|n| n.id == id)
+    }
+
+    pub fn my_id(&self) -> Option<NodeId> {
+        self.node.as_ref().map(|n| n.id())
+    }
+
+    /// Networks we own, other than `except`.
+    pub fn owned_networks(&self, except: Option<&str>) -> Vec<Network> {
+        let Some(me) = self.my_id() else {
+            return Vec::new();
         };
-        let name = non_empty(self.inputs.rename.update(cx, |i, cx| i.take(cx)));
-        self.run(move |n| async move { n.rename_peer(id, name).await });
+        self.config
+            .networks
+            .iter()
+            .filter(|n| n.active() && n.is_owner(&me) && Some(n.id.as_str()) != except)
+            .cloned()
+            .collect()
+    }
+
+    pub fn start_new_network(&mut self, cx: &mut Context<Self>) {
+        self.new_network = NewNetwork::default();
+        self.inputs.net_name.update(cx, |i, cx| i.take(cx));
+        self.open_sheet(Sheet::NewNetwork, cx);
+    }
+
+    pub fn create_network(&mut self, cx: &mut Context<Self>) {
+        if self.sheet != Some(Sheet::NewNetwork) {
+            return;
+        }
+        let name = self.inputs.net_name.read(cx).text().trim().to_string();
+        if name.is_empty() {
+            self.show_error("Give the network a name", cx);
+            return;
+        }
+        self.inputs.net_name.update(cx, |i, cx| i.take(cx));
+        let f = &self.new_network;
+        let (color, policy) = (f.color, f.policy);
+        let invite = match f.who {
+            WhoCanJoin::Anyone => Some((f.expires, Approval::Auto)),
+            WhoCanJoin::Approved => Some((f.expires, Approval::AskMe)),
+            WhoCanJoin::NoCode => None,
+        };
+        let tx = self.tx.clone();
+        self.sheet = None;
+        self.run_then(
+            move |n| async move { n.create_network(&name, color, policy, invite).await },
+            move |net| {
+                // Show the code right away so it can be sent to friends.
+                if net.invite_code().is_some() {
+                    let _ = tx.send(Msg::OpenSheet(Sheet::Invite(net.id.clone())));
+                }
+                Msg::Info(format!("{} created", net.name))
+            },
+        );
+        cx.notify();
+    }
+
+    pub fn start_join(&mut self, cx: &mut Context<Self>) {
+        let name = self.config.display_name.clone().unwrap_or_default();
+        self.inputs.join_code.update(cx, |i, cx| i.take(cx));
+        self.inputs
+            .join_name
+            .update(cx, |i, cx| i.set_text(name, cx));
+        self.open_sheet(Sheet::JoinNetwork, cx);
+    }
+
+    pub fn join_network(&mut self, cx: &mut Context<Self>) {
+        if self.sheet != Some(Sheet::JoinNetwork) {
+            return;
+        }
+        let code = self.inputs.join_code.read(cx).text().trim().to_string();
+        if let Err(e) = lanlink_core::InviteCode::parse(&code) {
+            self.show_error(format!("{e}"), cx);
+            return;
+        }
+        let name = non_empty(self.inputs.join_name.read(cx).text().trim().to_string());
+        self.inputs.join_code.update(cx, |i, cx| i.take(cx));
+        self.sheet = None;
+        self.show_toast("Asking the owner…", false, cx);
+        self.run_then(
+            move |n| async move { n.join_network(&code, name).await },
+            |status| {
+                Msg::Info(match status {
+                    JoinStatus::Pending => {
+                        "Request sent. You're in once the owner approves you.".into()
+                    }
+                    _ => "You joined the network".into(),
+                })
+            },
+        );
+        cx.notify();
+    }
+
+    /// Copy a network's invite code.
+    pub fn copy_invite(&mut self, code: String, cx: &mut Context<Self>) {
+        cx.write_to_clipboard(gpui::ClipboardItem::new_string(code));
+        self.show_toast("Invite code copied", false, cx);
+    }
+
+    /// Make a new code for a network we own (the old one stops working).
+    pub fn new_invite(&mut self, net: String, expires: InviteExpiry, approval: Approval) {
+        self.run_then(
+            move |n| async move { n.create_invite(&net, expires, approval).await },
+            |_| Msg::Info("New invite code made. The old one no longer works.".into()),
+        );
+    }
+
+    pub fn update_invite(&mut self, net: String, expires: InviteExpiry, approval: Approval) {
+        self.run(
+            move |n| async move { n.update_invite(&net, expires, approval).await.map(|_| ()) },
+        );
+    }
+
+    pub fn start_rename_network(&mut self, id: String, cx: &mut Context<Self>) {
+        let current = self
+            .network(&id)
+            .map(|n| n.name.clone())
+            .unwrap_or_default();
+        self.inputs
+            .rename
+            .update(cx, |i, cx| i.set_text(current, cx));
+        self.open_sheet(Sheet::RenameNetwork(id), cx);
+    }
+
+    pub fn toggle_collapsed(&mut self, id: String, cx: &mut Context<Self>) {
+        if !self.collapsed.remove(&id) {
+            self.collapsed.insert(id);
+        }
         cx.notify();
     }
 

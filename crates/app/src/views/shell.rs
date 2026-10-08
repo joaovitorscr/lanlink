@@ -6,7 +6,7 @@ use gpui::{
 };
 
 use crate::format;
-use crate::state::{MenuKind, Root, Sheet, Tab, UpdatePhase};
+use crate::state::{MenuKind, Root, Tab, UpdatePhase};
 use crate::theme::Theme;
 use crate::update;
 use crate::widgets::*;
@@ -103,7 +103,7 @@ impl Root {
         let requests = self.requests.len();
 
         let tabs = [
-            (Tab::Peers, "Peers", "users", t.blue),
+            (Tab::Peers, "Networks", "users", t.blue),
             (Tab::Hosting, "Hosting", "broadcast", t.green),
             (Tab::Tunnels, "Tunnels", "arrows-exchange", t.purple),
             (Tab::Settings, "Settings", "settings", t.fg2),
@@ -212,8 +212,24 @@ impl Root {
                 )
             })
             .child(
-                button(t, "add-peer", Some("plus"), "Add Peer", ButtonKind::Primary)
-                    .on_click(cx.listener(|this, _, _, cx| this.open_sheet(Sheet::AddPeer, cx))),
+                button(
+                    t,
+                    "join-network",
+                    Some("link"),
+                    "Join Network",
+                    ButtonKind::Secondary,
+                )
+                .on_click(cx.listener(|this, _, _, cx| this.start_join(cx))),
+            )
+            .child(
+                button(
+                    t,
+                    "new-network",
+                    Some("plus"),
+                    "New Network",
+                    ButtonKind::Primary,
+                )
+                .on_click(cx.listener(|this, _, _, cx| this.start_new_network(cx))),
             )
     }
 
