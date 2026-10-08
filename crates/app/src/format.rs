@@ -1,7 +1,5 @@
 //! Human-readable formatting helpers.
 
-use std::time::Duration;
-
 /// `1536` -> "1.5 KB". Binary units, one decimal above bytes.
 pub fn bytes(n: u64) -> String {
     const UNITS: [&str; 5] = ["KB", "MB", "GB", "TB", "PB"];
@@ -22,20 +20,6 @@ pub fn rate(bytes_per_sec: f64) -> String {
     format!("{}/s", bytes(bytes_per_sec.max(0.0).round() as u64))
 }
 
-/// Coarse duration for "connected for": "<1 min", "12 min", "2 h 5 min", "3 d 4 h".
-pub fn duration(d: Duration) -> String {
-    let mins = d.as_secs() / 60;
-    if mins == 0 {
-        "<1 min".into()
-    } else if mins < 60 {
-        format!("{mins} min")
-    } else if mins < 60 * 24 {
-        format!("{} h {} min", mins / 60, mins % 60)
-    } else {
-        format!("{} d {} h", mins / (60 * 24), (mins / 60) % 24)
-    }
-}
-
 /// "abcdef…wxyz" for long ids, unchanged for short ones.
 pub fn short_id(id: &str) -> String {
     let chars: Vec<char> = id.chars().collect();
@@ -46,13 +30,6 @@ pub fn short_id(id: &str) -> String {
     } else {
         id.to_string()
     }
-}
-
-/// Host part of a relay URL: "https://use1-1.relay.n0.iroh.link./" -> "use1-1.relay.n0.iroh.link".
-pub fn relay_host(url: &str) -> String {
-    let rest = url.split_once("://").map_or(url, |(_, r)| r);
-    let host = rest.split(['/', '?']).next().unwrap_or(rest);
-    host.trim_end_matches('.').to_string()
 }
 
 /// Port typed by the user: 1-65535.
@@ -75,29 +52,9 @@ mod tests {
     }
 
     #[test]
-    fn formats_durations() {
-        assert_eq!(duration(Duration::from_secs(30)), "<1 min");
-        assert_eq!(duration(Duration::from_secs(12 * 60 + 5)), "12 min");
-        assert_eq!(duration(Duration::from_secs(125 * 60)), "2 h 5 min");
-        assert_eq!(
-            duration(Duration::from_secs((24 * 3 + 4) * 3600)),
-            "3 d 4 h"
-        );
-    }
-
-    #[test]
     fn shortens_ids() {
         assert_eq!(short_id("abc"), "abc");
         assert_eq!(short_id("0123456789abcdefXYZW"), "012345…XYZW");
-    }
-
-    #[test]
-    fn relay_hosts() {
-        assert_eq!(
-            relay_host("https://use1-1.relay.n0.iroh.link./"),
-            "use1-1.relay.n0.iroh.link"
-        );
-        assert_eq!(relay_host("relay.example.com"), "relay.example.com");
     }
 
     #[test]

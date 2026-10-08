@@ -1,216 +1,215 @@
-//! Peers tab: share our id, add a friend, peer cards with their services.
+//! Peers pane: requests banner, your ID, grouped peer list with a ⋯ menu per peer.
 
-use std::time::SystemTime;
-
-use gpui::{div, prelude::*, rgb, ClipboardItem, Context, Focusable};
+use gpui::{div, prelude::*, px, ClipboardItem, Context, FontWeight};
 use lanlink_core::{ConnState, PeerInfo};
 
 use crate::format;
-use crate::state::Root;
-use crate::theme::*;
+use crate::state::{MenuKind, Root};
+use crate::theme::Theme;
 use crate::widgets::*;
 
 impl Root {
     pub fn render_peers(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
+        let t = theme(cx);
         let id = self.node.as_ref().map(|n| n.id().to_string());
-        let share = card(Some("Share your ID"))
-            .child(small("Send this to your friend so they can add you."))
-            .child(
-                row()
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .text_xs()
-                            .child(id.clone().unwrap_or_else(|| "Starting…".into())),
-                    )
-                    .when_some(id, |el, full| {
-                        el.child(button("copy-full-id", "Copy", ACCENT).on_click(
-                            move |_, _, cx| {
-                                cx.write_to_clipboard(ClipboardItem::new_string(full.clone()))
-                            },
-                        ))
-                    }),
-            );
-
-        let add = card(Some("Add friend"))
-            .child(row().child(self.inputs.peer_id.clone()))
-            .child(
-                row().child(self.inputs.peer_name.clone()).child(
-                    button("add-peer", "Add", ACCENT)
-                        .on_click(cx.listener(|this, _, _, cx| this.add_peer(cx))),
-                ),
-            );
-
         let peers = self.peers.value.clone();
+        let n = peers.len();
+
         col()
-            .gap_3()
-            .child(share)
-            .child(add)
-            .when(!self.peers.available, |el| {
-                el.child(muted("Peer list not available"))
-            })
-            .when(peers.is_empty() && self.peers.available, |el| {
-                el.child(muted("No friends yet. Add one above."))
-            })
-            .children(peers.iter().map(|p| self.render_peer(p, cx)))
+            .child(pane_header(
+                &t,
+                "Peers",
+                "People who can connect to you, and who you connect to.",
+            ))
+            .children(self.render_requests(&t, cx))
+            .child(glabel(&t, "Your ID"))
+            .child(
+                group(&t).child(
+                    group_row(&t, true)
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .truncate()
+                                .text_size(px(12.))
+                                .child(id.clone().unwrap_or_else(|| "Starting…".into())),
+                        )
+                        .when_some(id, |el, full| {
+                            el.child(
+                                button(
+                                    &t,
+                                    "copy-full-id",
+                                    Some("copy"),
+                                    "Copy",
+                                    ButtonKind::Secondary,
+                                )
+                                .on_click(cx.listener(
+                                    move |this, _, _, cx| {
+                                        cx.write_to_clipboard(ClipboardItem::new_string(
+                                            full.clone(),
+                                        ));
+                                        this.show_toast("ID copied", false, cx);
+                                    },
+                                )),
+                            )
+                        }),
+                ),
+            )
+            .child(glabel(&t, "Peers"))
+            .child(
+                group(&t)
+                    .when(!self.peers.available, |el| {
+                        el.child(empty(&t, "Peer list not available"))
+                    })
+                    .when(peers.is_empty() && self.peers.available, |el| {
+                        el.child(empty(
+                            &t,
+                            "No peers yet. Use Add Peer, or send your ID to a friend.",
+                        ))
+                    })
+                    .children(
+                        peers
+                            .iter()
+                            .enumerate()
+                            .map(|(i, p)| self.render_peer(&t, p, i + 1 == n, cx)),
+                    ),
+            )
     }
 
-    fn render_peer(&mut self, p: &PeerInfo, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_requests(&mut self, t: &Theme, cx: &mut Context<Self>) -> Vec<impl IntoElement> {
+        self.requests
+            .value
+            .clone()
+            .into_iter()
+            .map(|r| {
+                let key = r.id.to_string();
+                let who = r.name.clone().unwrap_or_else(|| format::short_id(&key));
+                let id = r.id;
+                row()
+                    .mt_3p5()
+                    .px_3p5()
+                    .py_2p5()
+                    .rounded(px(10.))
+                    .bg(t.blue.opacity(0.1))
+                    .border_1()
+                    .border_color(t.blue.opacity(0.3))
+                    .child(avatar(t, &who, &key, 30.))
+                    .child(title_sub(
+                        t,
+                        format!("{who} wants to connect"),
+                        Some(format::short_id(&key)),
+                    ))
+                    .child(
+                        button(t, eid("deny", id), None, "Ignore", ButtonKind::Secondary).on_click(
+                            cx.listener(move |this, _, _, cx| this.respond_request(id, false, cx)),
+                        ),
+                    )
+                    .child(
+                        button(t, eid("allow", id), None, "Allow", ButtonKind::Primary).on_click(
+                            cx.listener(move |this, _, _, cx| this.respond_request(id, true, cx)),
+                        ),
+                    )
+            })
+            .collect()
+    }
+
+    fn render_peer(
+        &mut self,
+        t: &Theme,
+        p: &PeerInfo,
+        last: bool,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
         let id = p.id;
+        let key = id.to_string();
         let name = self.peer_name(id);
-        let (label, color) = match p.state {
-            ConnState::Disconnected => ("Disconnected", GREY),
-            ConnState::Connecting => ("Connecting", YELLOW),
-            ConnState::Relayed => ("Relayed", ORANGE),
-            ConnState::Direct => ("Direct", GREEN),
+        let (label, color, dot_color) = match p.state {
+            ConnState::Disconnected => ("Offline", t.fg2, t.fg3),
+            ConnState::Connecting => ("Connecting", t.orange, t.orange),
+            ConnState::Relayed => ("Relayed", t.orange, t.orange),
+            ConnState::Direct => ("Direct", t.green, t.green),
         };
         let st = p.stats;
-        let latency = if st.samples > 0 {
-            format!("{:.1} ms", st.last_ms)
-        } else {
-            p.latency_ms
-                .map(|ms| format!("{ms} ms"))
-                .unwrap_or_default()
-        };
-        let stats_line = (st.samples > 0).then(|| {
-            format!(
-                "last {}s  min {:.1}  avg {:.1}  max {:.1}  jitter {:.1} ms",
-                st.samples, st.min_ms, st.avg_ms, st.max_ms, st.jitter_ms
-            )
-        });
-        let connected = p.connected_since.map(|since| {
-            let d = SystemTime::now().duration_since(since).unwrap_or_default();
-            format!("Connected for {}", format::duration(d))
-        });
-        let traffic = format!(
-            "Sent {} · Received {}",
-            format::bytes(p.bytes_sent),
-            format::bytes(p.bytes_received)
-        );
+        let mut parts = vec![label.to_string()];
+        if st.samples > 0 {
+            parts.push(format!("{:.0} ms", st.last_ms));
+            parts.push(format!("jitter {:.0} ms", st.jitter_ms));
+        } else if let Some(ms) = p.latency_ms {
+            parts.push(format!("{ms} ms"));
+        }
+        if p.state != ConnState::Disconnected && (p.bytes_sent > 0 || p.bytes_received > 0) {
+            parts.push(format!(
+                "↑ {} ↓ {}",
+                format::bytes(p.bytes_sent),
+                format::bytes(p.bytes_received)
+            ));
+        }
+        if let Some(e) = &p.last_error {
+            parts.push(e.clone());
+        }
+        let sub = parts.join(" · ");
 
-        let renaming = self
-            .renaming
-            .as_ref()
-            .filter(|(rid, _)| *rid == id)
-            .map(|(_, i)| i.clone());
-        let confirming = self.confirm_remove == Some(id);
-
-        let title =
-            match renaming {
-                Some(input) => row()
-                    .flex_1()
-                    .child(input)
-                    .child(
-                        button(eid("rename-save", id), "Save", ACCENT)
-                            .on_click(cx.listener(|this, _, _, cx| this.finish_rename(cx))),
-                    )
-                    .child(button(eid("rename-cancel", id), "Cancel", BORDER).on_click(
-                        cx.listener(|this, _, _, cx| {
-                            this.renaming = None;
-                            cx.notify();
-                        }),
-                    )),
-                None => row()
+        let menu_open = self.menu_is(&MenuKind::Peer(id));
+        group_row(t, last)
+            .child(avatar(t, &name, &key, 30.))
+            .child(
+                col()
                     .flex_1()
                     .min_w_0()
-                    .child(div().flex_1().min_w_0().truncate().child(name.clone()))
-                    .child(muted(latency))
-                    .child(badge(label, color)),
-            };
-
-        let actions = row()
-            .child(
-                button(eid("reconnect", id), "Reconnect", BORDER).on_click(cx.listener(
-                    move |this, _, _, _| this.run(move |n| async move { n.reconnect(id).await }),
-                )),
+                    .child(div().truncate().font_weight(FontWeight::MEDIUM).child(name))
+                    .child(
+                        row()
+                            .gap_1p5()
+                            .text_size(px(11.5))
+                            .text_color(t.fg2)
+                            .child(dot(dot_color))
+                            .child(div().truncate().child(sub)),
+                    ),
             )
-            .child(
-                button(eid("rename", id), "Rename", BORDER).on_click(cx.listener(
-                    move |this, _, window, cx| {
-                        let current = this.config.peer_names.get(&id.to_string()).cloned();
-                        let input = this.start_rename(id, current.unwrap_or_default(), cx);
-                        window.focus(&input.focus_handle(cx));
-                        cx.notify();
-                    },
-                )),
-            )
-            .child(div().flex_1())
-            .child(
-                button(
-                    eid("remove", id),
-                    if confirming {
-                        "Click again to remove"
-                    } else {
-                        "Remove"
-                    },
-                    if confirming { DANGER } else { BORDER },
+            .when(p.state == ConnState::Disconnected, |el| {
+                el.child(
+                    button(
+                        t,
+                        eid("reconnect", id),
+                        None,
+                        "Reconnect",
+                        ButtonKind::Secondary,
+                    )
+                    .on_click(cx.listener(move |this, _, _, _| {
+                        this.run(move |n| async move { n.reconnect(id).await })
+                    })),
                 )
-                .on_click(cx.listener(move |this, _, _, cx| this.remove_peer(id, cx))),
-            );
-
-        let services = p.services.iter().filter(|s| s.enabled).map(|s| {
-            let svc = s.clone();
-            let open = self.open_tunnel(id, &s.name);
-            let info = format!(
-                "{} · {} {}{}",
-                s.name,
-                proto(s.protocol),
-                s.port,
-                if s.minecraft_lan { " · Minecraft" } else { "" }
-            );
-            let action = match open {
-                Some(t) => {
-                    let addr = t.local_addr.to_string();
-                    row()
-                        .child(small(format!("Open at {addr}")))
-                        .child(
-                            button(eid("copy-open", format!("{id}-{}", s.name)), "Copy", BORDER)
-                                .on_click(move |_, _, cx| {
-                                    cx.write_to_clipboard(ClipboardItem::new_string(addr.clone()))
-                                }),
-                        )
-                        .into_any_element()
-                }
-                None => button(
-                    eid("connect", format!("{id}-{}", s.name)),
-                    "Connect",
-                    ACCENT,
-                )
-                .on_click(cx.listener(move |this, _, _, _| this.connect_service(id, svc.clone())))
-                .into_any_element(),
-            };
-            row()
-                .pl_2()
-                .border_l_2()
-                .border_color(rgb(BORDER))
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .truncate()
-                        .text_color(rgb(MUTED))
-                        .child(info),
-                )
-                .child(action)
-        });
-
-        card(None)
-            .child(title)
-            .when_some(stats_line, |el, l| el.child(small(l)))
-            .when_some(connected, |el, c| el.child(small(c)))
-            .child(small(traffic))
-            .when_some(p.last_error.clone(), |el, e| {
-                el.child(div().text_xs().text_color(rgb(AMBER)).child(e))
             })
-            .child(actions)
-            .children(services)
+            .when(p.state != ConnState::Disconnected, |el| {
+                el.child(pill(
+                    if p.state == ConnState::Direct {
+                        "Connected"
+                    } else {
+                        label
+                    },
+                    color,
+                ))
+            })
+            .child(
+                icon_button(t, eid("menu", id), "dots")
+                    .when(menu_open, |el| el.bg(t.hover))
+                    .on_click(cx.listener(move |this, ev: &gpui::ClickEvent, _, cx| {
+                        let at = this.menu_at(ev.position());
+                        this.toggle_menu(MenuKind::Peer(id), at, cx);
+                    })),
+            )
     }
 }
 
-pub fn proto(p: lanlink_core::Protocol) -> &'static str {
-    match p {
-        lanlink_core::Protocol::Tcp => "TCP",
-        lanlink_core::Protocol::Udp => "UDP",
-    }
+/// Large title plus one line of explanation at the top of a pane.
+pub fn pane_header(t: &Theme, title: &str, lede: &str) -> impl IntoElement {
+    col()
+        .mt_1()
+        .child(
+            div()
+                .text_size(px(22.))
+                .font_weight(FontWeight::BOLD)
+                .child(title.to_string()),
+        )
+        .child(small(t, lede.to_string()))
 }

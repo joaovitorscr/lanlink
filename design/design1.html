@@ -1,0 +1,268 @@
+<!doctype html>
+<html lang="en" data-theme="dark" data-blur="on" data-glass="liquid">
+<head>
+<meta charset="utf-8">
+<title>lanlink · design 1</title>
+<style>
+/* ---------- tokens ---------- */
+:root{
+  --font:-apple-system,BlinkMacSystemFont,"SF Pro Text","SF Pro Display","Helvetica Neue",Inter,"Segoe UI",sans-serif;
+  --mono:ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+  --blue:#0A84FF;--green:#30D158;--orange:#FF9F0A;--red:#FF453A;--purple:#BF5AF2;--teal:#64D2FF;
+  --radius:10px;
+}
+[data-theme="light"]{
+  --sidebar:rgba(236,236,241,.62);
+  --sidebar-opaque:#ececf1;
+  --content:rgba(246,246,248,.86);
+  --content-opaque:#f6f6f8;
+  --card:rgba(255,255,255,.78);
+  --card-stroke:rgba(0,0,0,.10);
+  --sep:rgba(0,0,0,.08);
+  --fg:#1d1d1f;--fg2:#6e6e73;--fg3:#aeaeb2;
+  --nav-hover:rgba(0,0,0,.05);
+  --btn:rgba(255,255,255,.9);--btn-stroke:rgba(0,0,0,.16);
+  --field:rgba(0,0,0,.05);
+  --window-stroke:rgba(0,0,0,.25);
+}
+[data-theme="dark"]{
+  --sidebar:rgba(36,36,40,.55);
+  --sidebar-opaque:#242428;
+  --content:rgba(30,30,33,.82);
+  --content-opaque:#1e1e21;
+  --card:rgba(255,255,255,.055);
+  --card-stroke:rgba(255,255,255,.09);
+  --sep:rgba(255,255,255,.08);
+  --fg:#f5f5f7;--fg2:#98989d;--fg3:#636366;
+  --nav-hover:rgba(255,255,255,.06);
+  --btn:rgba(255,255,255,.1);--btn-stroke:rgba(255,255,255,.14);
+  --field:rgba(255,255,255,.07);
+  --window-stroke:rgba(255,255,255,.14);
+}
+[data-blur="off"]{--sidebar:var(--sidebar-opaque);--content:var(--content-opaque)}
+[data-blur="off"] .blur{backdrop-filter:none!important;-webkit-backdrop-filter:none!important}
+
+*{box-sizing:border-box}
+html,body{margin:0;height:100%}
+body{font-family:var(--font);font-size:13px;color:var(--fg);-webkit-font-smoothing:antialiased;
+  background:#000 url("") center/cover;min-height:100vh;display:flex;align-items:center;justify-content:center;position:relative;overflow:hidden}
+/* fake desktop wallpaper so translucency is visible */
+.wall{position:fixed;inset:0;z-index:0;
+  background:
+    radial-gradient(700px 500px at 15% 20%,#ff7a59 0%,transparent 60%),
+    radial-gradient(800px 600px at 85% 30%,#5e5ce6 0%,transparent 60%),
+    radial-gradient(600px 500px at 50% 95%,#30d158 0%,transparent 60%),
+    linear-gradient(160deg,#1b1e3a,#0b0b12)}
+[data-theme="light"] .wall{background:
+    radial-gradient(700px 500px at 15% 20%,#ffb28a 0%,transparent 60%),
+    radial-gradient(800px 600px at 85% 30%,#9ec5ff 0%,transparent 60%),
+    radial-gradient(600px 500px at 50% 95%,#b8f0c5 0%,transparent 60%),
+    linear-gradient(160deg,#e9eefc,#f6f1ea)}
+
+/* ---------- controls (not part of the app) ---------- */
+.controls{position:fixed;top:14px;right:16px;z-index:5;display:flex;gap:6px;font-size:12px}
+.controls button{font:inherit;padding:5px 11px;border-radius:999px;border:.5px solid rgba(255,255,255,.3);background:rgba(0,0,0,.35);color:#fff;cursor:pointer;backdrop-filter:blur(10px)}
+.controls button.on{background:var(--blue);border-color:var(--blue)}
+
+/* ---------- window ---------- */
+.win{position:relative;z-index:1;width:820px;height:540px;border-radius:12px;overflow:hidden;display:flex;
+  box-shadow:0 30px 80px rgba(0,0,0,.45),0 0 0 .5px var(--window-stroke),inset 0 0 0 .5px rgba(255,255,255,.08)}
+.lights{position:absolute;top:14px;left:14px;display:flex;gap:8px;z-index:3}
+.lights i{width:12px;height:12px;border-radius:50%;display:block}
+.lights i:nth-child(1){background:#ff5f57}.lights i:nth-child(2){background:#febc2e}.lights i:nth-child(3){background:#28c840}
+
+.side{width:210px;background:var(--sidebar);backdrop-filter:blur(40px) saturate(180%);-webkit-backdrop-filter:blur(40px) saturate(180%);
+  border-right:.5px solid var(--sep);padding:48px 10px 12px;display:flex;flex-direction:column;flex:none}
+.me{display:flex;align-items:center;gap:9px;padding:6px 8px;margin-bottom:12px}
+.nav{display:flex;align-items:center;gap:9px;padding:6px 8px;border-radius:6px;cursor:pointer;color:var(--fg);user-select:none}
+.nav:hover{background:var(--nav-hover)}
+.nav.on{background:var(--blue);color:#fff}
+.nav .ic{width:20px;height:20px;border-radius:5px;display:inline-flex;align-items:center;justify-content:center;color:#fff;font-size:11px;flex:none;box-shadow:inset 0 0 0 .5px rgba(255,255,255,.25)}
+.nav .badge{margin-left:auto;background:var(--red);color:#fff;font-size:10px;font-weight:700;min-width:16px;height:16px;border-radius:8px;display:inline-flex;align-items:center;justify-content:center;padding:0 5px}
+.nav.on .badge{background:rgba(255,255,255,.3)}
+.side .foot{margin-top:auto;padding:6px 8px;font-size:11px;color:var(--fg2);display:flex;align-items:center;gap:6px}
+
+.main{flex:1;background:var(--content);backdrop-filter:blur(40px) saturate(150%);-webkit-backdrop-filter:blur(40px) saturate(150%);display:flex;flex-direction:column;min-width:0}
+.titlebar{height:48px;flex:none;display:flex;align-items:center;justify-content:flex-end;gap:6px;padding:0 16px;-webkit-app-region:drag}
+.content{flex:1;overflow:auto;padding:0 22px 22px}
+.hdr{font-size:22px;font-weight:700;letter-spacing:-.02em;margin:2px 0 2px}
+.lede{color:var(--fg2);font-size:12px}
+
+/* atoms */
+.pane{display:none}.pane.on{display:block}
+.glabel{font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--fg2);margin:18px 0 6px 2px}
+.group{background:var(--card);border-radius:var(--radius);box-shadow:0 0 0 .5px var(--card-stroke),0 1px 2px rgba(0,0,0,.04)}
+.row{display:flex;align-items:center;gap:10px;padding:10px 14px;border-bottom:.5px solid var(--sep)}
+.row:last-child{border-bottom:none}
+.row .grow{flex:1;min-width:0}
+.row .t{font-weight:500}
+.row .s{font-size:11.5px;color:var(--fg2);margin-top:1px}
+.avatar{width:30px;height:30px;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;font-weight:600;font-size:12px;color:#fff;flex:none}
+.dot{width:8px;height:8px;border-radius:50%;display:inline-block;margin-right:6px;vertical-align:0}
+.dot.g{background:var(--green);box-shadow:0 0 0 3px rgba(48,209,88,.18)}
+.dot.o{background:var(--orange);box-shadow:0 0 0 3px rgba(255,159,10,.18)}
+.dot.gr{background:var(--fg3)}
+.pill{font-size:11px;font-weight:600;padding:2px 8px;border-radius:999px}
+.pill.g{background:rgba(48,209,88,.16);color:#1f9a44}[data-theme="dark"] .pill.g{color:var(--green)}
+.pill.o{background:rgba(255,159,10,.16);color:#c67600}[data-theme="dark"] .pill.o{color:var(--orange)}
+.btn{font:inherit;font-size:12px;font-weight:500;padding:5px 12px;border-radius:7px;border:none;cursor:pointer;display:inline-flex;align-items:center;gap:5px;color:var(--fg)}
+.btn.primary{background:var(--blue);color:#fff;box-shadow:0 1px 2px rgba(0,0,0,.25)}
+.btn.sec{background:var(--btn);box-shadow:0 0 0 .5px var(--btn-stroke),0 1px 1px rgba(0,0,0,.06)}
+.btn.ghost{background:transparent;color:var(--blue)}
+.btn.danger{color:var(--red)}
+.mono{font-family:var(--mono);font-size:12px}
+.muted{color:var(--fg2)}
+.field{background:var(--field);border:.5px solid var(--card-stroke);border-radius:6px;padding:5px 8px;font:inherit;color:var(--fg);min-width:200px}
+.toggle{width:36px;height:21px;border-radius:999px;background:var(--fg3);position:relative;flex:none}
+.toggle.on{background:var(--green)}
+.toggle::after{content:"";position:absolute;left:2px;top:2px;width:17px;height:17px;border-radius:50%;background:#fff;box-shadow:0 1px 2px rgba(0,0,0,.3);transition:.15s}
+.toggle.on::after{left:17px}
+.banner{display:flex;align-items:center;gap:10px;padding:10px 14px;border-radius:var(--radius);background:rgba(10,132,255,.1);box-shadow:0 0 0 .5px rgba(10,132,255,.3);margin-top:14px}
+.empty{text-align:center;padding:26px;color:var(--fg2);font-size:12px}
+
+/* ---------- Liquid Glass (macOS 26+) ---------- */
+[data-glass="liquid"] .win{background:var(--content);backdrop-filter:blur(40px) saturate(150%);-webkit-backdrop-filter:blur(40px) saturate(150%)}
+[data-glass="liquid"] .main{background:transparent;backdrop-filter:none;-webkit-backdrop-filter:none}
+[data-glass="liquid"] .side{
+  position:absolute;left:10px;top:42px;bottom:10px;width:200px;z-index:2;
+  border-radius:16px;border:none;padding:12px 8px 10px;
+  background:var(--glass);
+  backdrop-filter:blur(28px) saturate(190%) brightness(var(--glass-bright));-webkit-backdrop-filter:blur(28px) saturate(190%) brightness(var(--glass-bright));
+  box-shadow:
+    inset 0 0 0 .5px var(--glass-stroke),          /* rim */
+    inset 0 1px 0 var(--glass-spec),                 /* top specular */
+    inset 0 -1px 0 rgba(0,0,0,.12),                  /* bottom shade */
+    0 10px 30px rgba(0,0,0,.28),0 1px 2px rgba(0,0,0,.2)}
+[data-glass="liquid"] .side::before{ /* lensing highlight along the edge */
+  content:"";position:absolute;inset:0;border-radius:inherit;pointer-events:none;
+  background:linear-gradient(135deg,rgba(255,255,255,.22) 0%,rgba(255,255,255,0) 28%,rgba(255,255,255,0) 72%,rgba(255,255,255,.1) 100%);
+  mask:linear-gradient(#000,#000) content-box,linear-gradient(#000,#000);mask-composite:exclude;-webkit-mask-composite:xor;padding:1px}
+[data-glass="liquid"] .main{padding-left:220px}
+[data-glass="liquid"] .lights{top:16px}
+[data-glass="liquid"] .me{margin-top:0}
+[data-glass="liquid"] .nav.on{background:var(--glass-sel);color:var(--fg);box-shadow:inset 0 0 0 .5px var(--glass-stroke),0 1px 2px rgba(0,0,0,.12)}
+[data-glass="liquid"] .nav.on .badge{background:var(--red)}
+[data-glass="liquid"] .titlebar{padding-right:14px}
+[data-theme="dark"]{--glass:rgba(60,60,70,.38);--glass-stroke:rgba(255,255,255,.22);--glass-spec:rgba(255,255,255,.28);--glass-sel:rgba(255,255,255,.16);--glass-bright:1.05}
+[data-theme="light"]{--glass:rgba(255,255,255,.42);--glass-stroke:rgba(255,255,255,.7);--glass-spec:rgba(255,255,255,.9);--glass-sel:rgba(255,255,255,.75);--glass-bright:1.08}
+/* Reduce Transparency / blur off: glass collapses to a flat opaque panel, same geometry */
+[data-glass="liquid"][data-blur="off"] .win{background:var(--content-opaque)}
+[data-glass="liquid"][data-blur="off"] .side{background:var(--sidebar-opaque);box-shadow:inset 0 0 0 .5px var(--card-stroke),0 4px 14px rgba(0,0,0,.18)}
+[data-glass="liquid"][data-blur="off"] .side::before{display:none}
+.ti{width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;flex:none}
+.nav .ic .ti{width:13px;height:13px;stroke-width:2.2}
+.btn .ti{width:13px;height:13px}
+.avatar .ti{width:16px;height:16px}
+</style>
+</head>
+<body>
+<svg style="display:none" xmlns="http://www.w3.org/2000/svg"><symbol id="i-arrows-exchange" viewBox="0 0 24 24"><path d="M7 10h14l-4 -4" /><path d="M17 14h-14l4 4" /></symbol><symbol id="i-bell" viewBox="0 0 24 24"><path d="M10 5a2 2 0 1 1 4 0a7 7 0 0 1 4 6v3a4 4 0 0 0 2 3h-16a4 4 0 0 0 2 -3v-3a7 7 0 0 1 4 -6" /><path d="M9 17v1a3 3 0 0 0 6 0v-1" /></symbol><symbol id="i-broadcast" viewBox="0 0 24 24"><path d="M18.364 19.364a9 9 0 1 0 -12.728 0" /><path d="M15.536 16.536a5 5 0 1 0 -7.072 0" /><path d="M11 13a1 1 0 1 0 2 0a1 1 0 1 0 -2 0" /></symbol><symbol id="i-copy" viewBox="0 0 24 24"><path d="M7 9.667a2.667 2.667 0 0 1 2.667 -2.667h8.666a2.667 2.667 0 0 1 2.667 2.667v8.666a2.667 2.667 0 0 1 -2.667 2.667h-8.666a2.667 2.667 0 0 1 -2.667 -2.667l0 -8.666" /><path d="M4.012 16.737a2.005 2.005 0 0 1 -1.012 -1.737v-10c0 -1.1 .9 -2 2 -2h10c.75 0 1.158 .385 1.5 1" /></symbol><symbol id="i-device-gamepad-2" viewBox="0 0 24 24"><path d="M12 5h3.5a5 5 0 0 1 0 10h-5.5l-4.015 4.227a2.3 2.3 0 0 1 -3.923 -2.035l1.634 -8.173a5 5 0 0 1 4.904 -4.019h3.4" /><path d="M14 15l4.07 4.284a2.3 2.3 0 0 0 3.925 -2.023l-1.6 -8.232" /><path d="M8 9v2" /><path d="M7 10h2" /><path d="M14 10h2" /></symbol><symbol id="i-dots" viewBox="0 0 24 24"><path d="M4 12a1 1 0 1 0 2 0a1 1 0 1 0 -2 0" /><path d="M11 12a1 1 0 1 0 2 0a1 1 0 1 0 -2 0" /><path d="M18 12a1 1 0 1 0 2 0a1 1 0 1 0 -2 0" /></symbol><symbol id="i-pick" viewBox="0 0 24 24"><path d="M13 8l-9.383 9.418a2.091 2.091 0 0 0 0 2.967a2.11 2.11 0 0 0 2.976 0l9.407 -9.385" /><path d="M9 3h4.586a1 1 0 0 1 .707 .293l6.414 6.414a1 1 0 0 1 .293 .707v4.586a2 2 0 1 1 -4 0v-3l-5 -5h-3a2 2 0 1 1 0 -4" /></symbol><symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5l0 14" /><path d="M5 12l14 0" /></symbol><symbol id="i-settings" viewBox="0 0 24 24"><path d="M10.325 4.317c.426 -1.756 2.924 -1.756 3.35 0a1.724 1.724 0 0 0 2.573 1.066c1.543 -.94 3.31 .826 2.37 2.37a1.724 1.724 0 0 0 1.065 2.572c1.756 .426 1.756 2.924 0 3.35a1.724 1.724 0 0 0 -1.066 2.573c.94 1.543 -.826 3.31 -2.37 2.37a1.724 1.724 0 0 0 -2.572 1.065c-.426 1.756 -2.924 1.756 -3.35 0a1.724 1.724 0 0 0 -2.573 -1.066c-1.543 .94 -3.31 -.826 -2.37 -2.37a1.724 1.724 0 0 0 -1.065 -2.572c-1.756 -.426 -1.756 -2.924 0 -3.35a1.724 1.724 0 0 0 1.066 -2.573c-.94 -1.543 .826 -3.31 2.37 -2.37c1 .608 2.296 .07 2.572 -1.065" /><path d="M9 12a3 3 0 1 0 6 0a3 3 0 0 0 -6 0" /></symbol><symbol id="i-users" viewBox="0 0 24 24"><path d="M5 7a4 4 0 1 0 8 0a4 4 0 1 0 -8 0" /><path d="M3 21v-2a4 4 0 0 1 4 -4h4a4 4 0 0 1 4 4v2" /><path d="M16 3.13a4 4 0 0 1 0 7.75" /><path d="M21 21v-2a4 4 0 0 0 -3 -3.85" /></symbol></svg>
+<div class="wall"></div>
+<div class="controls">
+  <button id="tL">Light</button><button id="tD" class="on">Dark</button>
+  <button id="bOn" class="on">Blur on</button><button id="bOff">Blur off</button>
+  <button id="gL" class="on">Liquid Glass</button><button id="gC">Classic</button>
+</div>
+
+<div class="win">
+  <div class="lights"><i></i><i></i><i></i></div>
+
+  <aside class="side blur">
+    <div class="me"><span class="avatar" style="background:linear-gradient(135deg,#5ac8fa,#007aff)">JV</span><div><div style="font-weight:600">João</div><div class="muted" style="font-size:11px"><span class="dot g" style="margin-right:4px"></span>Online</div></div></div>
+    <div class="nav on" data-pane="peers"><span class="ic" style="background:var(--blue)"><svg class="ti"><use href="#i-users"/></svg></span>Peers<span class="badge">1</span></div>
+    <div class="nav" data-pane="hosting"><span class="ic" style="background:var(--green)"><svg class="ti"><use href="#i-broadcast"/></svg></span>Hosting</div>
+    <div class="nav" data-pane="tunnels"><span class="ic" style="background:var(--purple)"><svg class="ti"><use href="#i-arrows-exchange"/></svg></span>Tunnels</div>
+    <div class="nav" data-pane="settings"><span class="ic" style="background:#8e8e93"><svg class="ti"><use href="#i-settings"/></svg></span>Settings</div>
+  </aside>
+
+  <main class="main blur">
+    <div class="titlebar"><button class="btn sec"><svg class="ti"><use href="#i-copy"/></svg>Copy my ID</button><button class="btn primary"><svg class="ti"><use href="#i-plus"/></svg>Add Peer</button></div>
+    <div class="content">
+
+      <!-- PEERS -->
+      <section class="pane on" id="peers">
+        <div class="hdr">Peers</div>
+        <div class="lede">People who can connect to you, and who you connect to.</div>
+        <div class="banner"><span class="avatar" style="background:var(--purple)">M</span><div class="grow" style="flex:1"><div style="font-weight:600">Mateus wants to connect</div><div class="s mono muted">9b0c 41de … 77aa</div></div><button class="btn sec">Ignore</button><button class="btn primary">Allow</button></div>
+        <div class="glabel">Your ID</div>
+        <div class="group"><div class="row"><div class="grow mono">e3f9 2a71 b8c4 … 7a21c</div><button class="btn sec"><svg class="ti"><use href="#i-copy"/></svg>Copy</button></div></div>
+        <div class="glabel">Peers</div>
+        <div class="group">
+          <div class="row"><span class="avatar" style="background:var(--orange)">A</span><div class="grow"><div class="t">Arthur</div><div class="s"><span class="dot g"></span>Direct · 32 ms · jitter 2 ms</div></div><span class="pill g">Connected</span><button class="btn ghost"><svg class="ti"><use href="#i-dots"/></svg></button></div>
+          <div class="row"><span class="avatar" style="background:var(--teal)">P</span><div class="grow"><div class="t">Pedro</div><div class="s"><span class="dot o"></span>Relayed · 118 ms</div></div><span class="pill o">Relayed</span><button class="btn ghost"><svg class="ti"><use href="#i-dots"/></svg></button></div>
+          <div class="row"><span class="avatar" style="background:var(--fg3)">L</span><div class="grow"><div class="t">Lucas</div><div class="s"><span class="dot gr"></span>Offline · last seen yesterday</div></div><button class="btn sec">Reconnect</button><button class="btn ghost"><svg class="ti"><use href="#i-dots"/></svg></button></div>
+        </div>
+      </section>
+
+      <!-- HOSTING -->
+      <section class="pane" id="hosting">
+        <div class="hdr">Hosting</div>
+        <div class="lede">Services on this computer that your peers can reach. Games, servers, anything that listens on a port.</div>
+        <div class="glabel">Detected</div>
+        <div class="group"><div class="row"><span class="avatar" style="background:#3a9d3a;border-radius:7px"><svg class="ti"><use href="#i-pick"/></svg></span><div class="grow"><div class="t">Minecraft</div><div class="s">Listening on TCP 54321 · detected just now</div></div><button class="btn primary">Share</button></div></div>
+        <div class="glabel">Shared</div>
+        <div class="group">
+          <div class="row"><span class="avatar" style="background:#3a9d3a;border-radius:7px"><svg class="ti"><use href="#i-pick"/></svg></span><div class="grow"><div class="t">Minecraft</div><div class="s">TCP 25565 · 1 peer connected · ↑ 180 KB/s</div></div><span class="pill g">Sharing</span><button class="btn sec">Stop</button></div>
+          <div class="row"><span class="avatar" style="background:#5e5ce6;border-radius:7px"><svg class="ti"><use href="#i-device-gamepad-2"/></svg></span><div class="grow"><div class="t">Terraria</div><div class="s">TCP 7777 · nobody connected</div></div><span class="pill g">Sharing</span><button class="btn sec">Stop</button></div>
+        </div>
+        <div class="glabel">Add manually</div>
+        <div class="group"><div class="row"><input class="field" placeholder="Name"><input class="field" style="min-width:90px" placeholder="Port"><select class="field" style="min-width:70px"><option>TCP</option><option>UDP</option></select><button class="btn sec" style="margin-left:auto">Add</button></div></div>
+        <div class="muted" style="font-size:11px;margin:10px 2px">Some games pick a new port every launch. If a shared service stops working, check that the port still matches.</div>
+      </section>
+
+      <!-- TUNNELS -->
+      <section class="pane" id="tunnels">
+        <div class="hdr">Tunnels</div>
+        <div class="lede">Services your friends share. Connect to the local address as if it were running on your own computer.</div>
+        <div class="glabel">From Arthur</div>
+        <div class="group">
+          <div class="row"><span class="avatar" style="background:#3a9d3a;border-radius:7px"><svg class="ti"><use href="#i-pick"/></svg></span><div class="grow"><div class="t">Minecraft</div><div class="s">Shared by Arthur · TCP</div></div><span class="mono" style="color:var(--blue)">127.0.0.1:25565</span><button class="btn sec"><svg class="ti"><use href="#i-copy"/></svg>Copy</button></div>
+        </div>
+        <div class="glabel">From Pedro</div>
+        <div class="group">
+          <div class="row"><span class="avatar" style="background:#5e5ce6;border-radius:7px"><svg class="ti"><use href="#i-device-gamepad-2"/></svg></span><div class="grow"><div class="t">Terraria</div><div class="s">Shared by Pedro · TCP · relayed, expect higher latency</div></div><span class="mono" style="color:var(--blue)">127.0.0.1:7777</span><button class="btn sec"><svg class="ti"><use href="#i-copy"/></svg>Copy</button></div>
+        </div>
+        <div class="glabel">From Lucas</div>
+        <div class="group"><div class="empty">Lucas is offline. Tunnels come back when they reconnect.</div></div>
+      </section>
+
+      <!-- SETTINGS -->
+      <section class="pane" id="settings">
+        <div class="hdr">Settings</div>
+        <div class="lede">lanlink 0.3.1 · stable channel</div>
+        <div class="glabel">Identity</div>
+        <div class="group">
+          <div class="row"><div class="grow"><div class="t">Display name</div><div class="s">Shown to your peers</div></div><input class="field" value="João"></div>
+          <div class="row"><div class="grow"><div class="t">Your ID</div><div class="s mono">e3f9 2a71 b8c4 … 7a21c</div></div><button class="btn sec"><svg class="ti"><use href="#i-copy"/></svg>Copy</button></div>
+        </div>
+        <div class="glabel">Network</div>
+        <div class="group">
+          <div class="row"><div class="grow"><div class="t">Relay server</div><div class="s">Used only when a direct path fails</div></div><input class="field" value="https://relay.lanlink.app"></div>
+          <div class="row"><div class="grow"><div class="t">Prefer direct connections</div><div class="s">Retry hole punching while relayed</div></div><span class="toggle on"></span></div>
+        </div>
+        <div class="glabel">App</div>
+        <div class="group">
+          <div class="row"><div class="grow"><div class="t">Launch at login</div></div><span class="toggle"></span></div>
+          <div class="row"><div class="grow"><div class="t">Appearance</div></div><select class="field" style="min-width:110px"><option>System</option><option>Light</option><option>Dark</option></select></div>
+          <div class="row"><div class="grow"><div class="t">Update channel</div><div class="s">Nightly is newer, less tested</div></div><select class="field" style="min-width:110px"><option>Stable</option><option>Nightly</option></select></div>
+          <div class="row"><div class="grow"><div class="t">Logs</div><div class="s">~/Library/Application Support/lanlink/logs</div></div><button class="btn sec">Open logs</button></div>
+        </div>
+      </section>
+
+    </div>
+  </main>
+</div>
+
+<script>
+const root=document.documentElement;
+const set=(k,v,a,b)=>{root.dataset[k]=v;a.classList.add('on');b.classList.remove('on')};
+tL.onclick=()=>set('theme','light',tL,tD);tD.onclick=()=>set('theme','dark',tD,tL);
+bOn.onclick=()=>set('blur','on',bOn,bOff);bOff.onclick=()=>set('blur','off',bOff,bOn);
+gL.onclick=()=>set('glass','liquid',gL,gC);gC.onclick=()=>set('glass','classic',gC,gL);
+document.querySelectorAll('.nav').forEach(n=>n.onclick=()=>{
+  document.querySelectorAll('.nav').forEach(x=>x.classList.toggle('on',x===n));
+  document.querySelectorAll('.pane').forEach(p=>p.classList.toggle('on',p.id===n.dataset.pane));
+});
+</script>
+</body>
+</html>

@@ -12,7 +12,7 @@ use std::net::{Ipv4Addr, TcpListener, UdpSocket};
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::time::{Duration, Instant};
 
-use gpui::{AppContext, Context, Entity, Subscription};
+use gpui::{AppContext, Context, Entity, Pixels, Point, Subscription};
 use lanlink_core::{
     ActiveTunnel, Config, LanWorld, NetworkStatus, Node, NodeEvent, NodeId, PeerInfo, PeerRequest,
     Protocol, Service, ServiceStatus, TunnelInfo,
@@ -20,7 +20,33 @@ use lanlink_core::{
 use tokio::sync::{broadcast, mpsc};
 
 use crate::format;
+use crate::theme::Prefs;
 use crate::widgets::text_input::{InputEvent, TextInput};
+
+/// A modal sheet dropping from the title bar.
+#[derive(Clone, PartialEq, Eq)]
+pub enum Sheet {
+    AddPeer,
+    AddService,
+    RenamePeer(NodeId),
+    RemovePeer(NodeId),
+    RemoveService(String),
+}
+
+/// Which popover menu is open.
+#[derive(Clone, PartialEq, Eq)]
+pub enum MenuKind {
+    Peer(NodeId),
+    Service(String),
+    Protocol,
+    Appearance,
+}
+
+pub struct OpenMenu {
+    pub kind: MenuKind,
+    /// Top-left corner, window coordinates.
+    pub at: Point<Pixels>,
+}
 
 /// Messages from the tokio side to the UI.
 pub enum Msg {
@@ -90,6 +116,7 @@ pub struct Inputs {
     pub svc_port: Entity<TextInput>,
     pub display_name: Entity<TextInput>,
     pub relay_url: Entity<TextInput>,
+    pub rename: Entity<TextInput>,
 }
 
 pub struct Root {
@@ -111,15 +138,14 @@ pub struct Root {
     pub toast: Option<Toast>,
     toast_generation: u64,
     pub inputs: Inputs,
-    pub svc_udp: bool,
+    pub svc_protocol: Protocol,
     pub svc_minecraft: bool,
-    pub renaming: Option<(NodeId, Entity<TextInput>)>,
-    pub confirm_remove: Option<NodeId>,
-    /// Optional-name inputs for the Allow banners, one per pending request.
-    pub request_names: HashMap<NodeId, Entity<TextInput>>,
+    pub sheet: Option<Sheet>,
+    pub menu: Option<OpenMenu>,
+    pub prefs: Prefs,
+    background: Option<gpui::WindowBackgroundAppearance>,
     pub restart_required: bool,
     _subscriptions: Vec<Subscription>,
-    dynamic_subscriptions: HashMap<NodeId, Subscription>,
 }
 
 impl Root {
@@ -169,6 +195,7 @@ impl Root {
             svc_port: input("Port", cx),
             display_name: input("Your name", cx),
             relay_url: input("https://relay.example.com (empty = default)", cx),
+            rename: input("Name", cx),
         };
         let subscriptions = vec![
             submit(&inputs.peer_id, cx, Self::add_peer),
@@ -177,6 +204,7 @@ impl Root {
             submit(&inputs.svc_port, cx, Self::add_service),
             submit(&inputs.display_name, cx, Self::save_display_name),
             submit(&inputs.relay_url, cx, Self::save_relay_url),
+            submit(&inputs.rename, cx, Self::finish_rename),
         ];
 
         Self {
@@ -197,14 +225,14 @@ impl Root {
             toast: None,
             toast_generation: 0,
             inputs,
-            svc_udp: false,
+            svc_protocol: Protocol::Tcp,
             svc_minecraft: false,
-            renaming: None,
-            confirm_remove: None,
-            request_names: HashMap::new(),
+            sheet: None,
+            menu: None,
+            prefs: Prefs::load(),
+            background: None,
             restart_required: false,
             _subscriptions: subscriptions,
-            dynamic_subscriptions: HashMap::new(),
         }
     }
 
@@ -242,7 +270,6 @@ impl Root {
                 self.resync();
             }
         }
-        self.sync_request_inputs(cx);
         cx.notify();
     }
 
@@ -296,7 +323,6 @@ impl Root {
         self.requests.poll(|| node.pending_requests());
         self.network.poll(|| node.network_status());
         self.update_rates();
-        self.sync_request_inputs(cx);
         cx.notify();
     }
 
@@ -334,31 +360,6 @@ impl Root {
         self.rates
             .get(&(peer, service.to_string()))
             .map_or((0.0, 0.0), |r| (r.up_rate, r.down_rate))
-    }
-
-    /// Keep one name input per pending request, prefilled with the name they sent.
-    fn sync_request_inputs(&mut self, cx: &mut Context<Self>) {
-        let ids: Vec<NodeId> = self.requests.value.iter().map(|r| r.id).collect();
-        self.request_names.retain(|id, _| ids.contains(id));
-        self.dynamic_subscriptions
-            .retain(|id, _| ids.contains(id) || self.renaming.as_ref().is_some_and(|r| r.0 == *id));
-        for r in self.requests.value.clone() {
-            if self.request_names.contains_key(&r.id) {
-                continue;
-            }
-            let name = r.name.clone().unwrap_or_default();
-            let input = cx.new(|cx| {
-                let mut i = TextInput::new("Name (optional)", cx);
-                i.set_text(name, cx);
-                i
-            });
-            let id = r.id;
-            let sub = cx.subscribe(&input, move |this, _, _: &InputEvent, cx| {
-                this.respond_request(id, true, cx)
-            });
-            self.dynamic_subscriptions.insert(id, sub);
-            self.request_names.insert(id, input);
-        }
     }
 
     // ---- toasts ----
@@ -438,60 +439,92 @@ impl Root {
         };
         self.inputs.peer_id.update(cx, |i, cx| i.take(cx));
         let name = non_empty(self.inputs.peer_name.update(cx, |i, cx| i.take(cx)));
+        self.sheet = None;
         self.run_then(
             move |n| async move { n.add_peer(peer, name).await },
             |()| Msg::Info("Friend added, connecting…".into()),
         );
-    }
-
-    pub fn respond_request(&mut self, id: NodeId, allow: bool, cx: &mut Context<Self>) {
-        let name = self
-            .request_names
-            .get(&id)
-            .map(|i| i.read(cx).text().trim().to_string())
-            .and_then(non_empty);
-        self.requests.value.retain(|r| r.id != id);
-        self.run(move |n| async move { n.respond_request(id, allow, name).await });
         cx.notify();
     }
 
-    pub fn start_rename(
-        &mut self,
-        id: NodeId,
-        current: String,
-        cx: &mut Context<Self>,
-    ) -> Entity<TextInput> {
-        let input = cx.new(|cx| {
-            let mut i = TextInput::new("Name", cx);
-            i.set_text(current, cx);
-            i
-        });
-        let sub = cx.subscribe(&input, move |this, _, _: &InputEvent, cx| {
-            this.finish_rename(cx)
-        });
-        self.dynamic_subscriptions.insert(id, sub);
-        self.renaming = Some((id, input.clone()));
-        input
+    pub fn respond_request(&mut self, id: NodeId, allow: bool, cx: &mut Context<Self>) {
+        self.requests.value.retain(|r| r.id != id);
+        self.run(move |n| async move { n.respond_request(id, allow, None).await });
+        cx.notify();
+    }
+
+    /// Open the rename sheet prefilled with the current local name.
+    pub fn start_rename(&mut self, id: NodeId, cx: &mut Context<Self>) {
+        let current = self
+            .config
+            .peer_names
+            .get(&id.to_string())
+            .cloned()
+            .unwrap_or_default();
+        self.inputs
+            .rename
+            .update(cx, |i, cx| i.set_text(current, cx));
+        self.open_sheet(Sheet::RenamePeer(id), cx);
     }
 
     pub fn finish_rename(&mut self, cx: &mut Context<Self>) {
-        let Some((id, input)) = self.renaming.take() else {
+        let Some(Sheet::RenamePeer(id)) = self.sheet.take() else {
             return;
         };
-        let name = non_empty(input.read(cx).text().trim().to_string());
+        let name = non_empty(self.inputs.rename.update(cx, |i, cx| i.take(cx)));
         self.run(move |n| async move { n.rename_peer(id, name).await });
         cx.notify();
     }
 
+    /// Remove for real (the sheet asked for confirmation).
     pub fn remove_peer(&mut self, id: NodeId, cx: &mut Context<Self>) {
-        if self.confirm_remove != Some(id) {
-            self.confirm_remove = Some(id);
-            cx.notify();
-            return;
-        }
-        self.confirm_remove = None;
+        self.sheet = None;
         self.peers.value.retain(|p| p.id != id);
         self.run(move |n| async move { n.remove_peer(id).await });
+        cx.notify();
+    }
+
+    pub fn remove_service(&mut self, name: String, cx: &mut Context<Self>) {
+        self.sheet = None;
+        self.run(move |n| async move { n.remove_service(&name).await });
+        cx.notify();
+    }
+
+    // ---- overlays ----
+
+    pub fn open_sheet(&mut self, sheet: Sheet, cx: &mut Context<Self>) {
+        self.menu = None;
+        self.sheet = Some(sheet);
+        cx.notify();
+    }
+
+    pub fn close_overlays(&mut self, cx: &mut Context<Self>) {
+        self.sheet = None;
+        self.menu = None;
+        cx.notify();
+    }
+
+    pub fn toggle_menu(&mut self, kind: MenuKind, at: Point<Pixels>, cx: &mut Context<Self>) {
+        self.menu = match &self.menu {
+            Some(m) if m.kind == kind => None,
+            _ => Some(OpenMenu { kind, at }),
+        };
+        cx.notify();
+    }
+
+    /// Keep the window backdrop in sync with the transparency preference.
+    pub fn apply_background(&mut self, window: &gpui::Window) {
+        let want = crate::glass::apply(window, self.prefs.transparency);
+        if self.background != Some(want) {
+            window.set_background_appearance(want);
+            self.background = Some(want);
+        }
+    }
+
+    pub fn save_prefs(&mut self, cx: &mut Context<Self>) {
+        if let Err(e) = self.prefs.save() {
+            self.show_error(format!("Could not save preferences: {e}"), cx);
+        }
         cx.notify();
     }
 
@@ -506,14 +539,6 @@ impl Root {
             move |n| async move { n.save_tunnel(peer, &svc.name, local, true).await },
             |t| Msg::Info(format!("Tunnel open at {}", t.local_addr)),
         );
-    }
-
-    /// The open tunnel to `peer`/`service`, if any.
-    pub fn open_tunnel(&self, peer: NodeId, service: &str) -> Option<ActiveTunnel> {
-        self.tunnel_list()
-            .into_iter()
-            .map(|t| t.tunnel)
-            .find(|t| t.peer == peer && t.service == service)
     }
 
     /// Tunnels with counters, or bare tunnels with zeros when `tunnels_info()` is unavailable.
@@ -572,14 +597,11 @@ impl Root {
         }
         self.inputs.svc_name.update(cx, |i, cx| i.take(cx));
         self.inputs.svc_port.update(cx, |i, cx| i.take(cx));
-        let protocol = if self.svc_udp {
-            Protocol::Udp
-        } else {
-            Protocol::Tcp
-        };
-        let mut svc = Service::new(name, protocol, port);
+        let mut svc = Service::new(name, self.svc_protocol, port);
         svc.minecraft_lan = self.svc_minecraft;
+        self.sheet = None;
         self.run(move |n| async move { n.add_service(svc).await });
+        cx.notify();
     }
 
     /// Hosted services with status, or config entries with unknown status as a fallback.

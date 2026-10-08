@@ -15,6 +15,13 @@ anyhow.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 open = "5"
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+objc2-app-kit = { version = "0.3", features = ["NSGlassEffectView", "NSView", "NSWindow", "NSResponder", "NSGraphics"] }
+raw-window-handle = "0.6"
 
 [build-dependencies]
 winresource = "0.1"

@@ -1,0 +1,465 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>lanlink · design mockups</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+:root{
+  --font:-apple-system,BlinkMacSystemFont,"SF Pro Text","SF Pro Display","Helvetica Neue",Inter,Segoe UI,sans-serif;
+  --mono:ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+  --blue:#0A84FF;--green:#30D158;--orange:#FF9F0A;--red:#FF453A;--purple:#BF5AF2;--teal:#64D2FF;
+}
+*{box-sizing:border-box}
+body{margin:0;font-family:var(--font);background:#1c1c1e;color:#f2f2f7;-webkit-font-smoothing:antialiased;padding:24px}
+h1{font-size:22px;font-weight:600;margin:0 0 4px;letter-spacing:-.01em}
+.sub{color:#8e8e93;font-size:13px;margin-bottom:16px}
+.picker{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:20px;position:sticky;top:0;padding:10px 0;background:#1c1c1e;z-index:9}
+.picker button{font:inherit;font-size:12px;padding:6px 12px;border-radius:999px;border:1px solid #3a3a3c;background:#2c2c2e;color:#d1d1d6;cursor:pointer}
+.picker button.on{background:#0A84FF;border-color:#0A84FF;color:#fff}
+.variant{display:none}
+.variant.on{display:block}
+.vtitle{font-size:15px;font-weight:600;margin:0 0 2px}
+.vdesc{font-size:13px;color:#8e8e93;margin:0 0 14px;max-width:720px}
+
+/* --- window chrome --- */
+.win{width:760px;height:500px;border-radius:12px;overflow:hidden;position:relative;box-shadow:0 20px 60px rgba(0,0,0,.6),0 0 0 .5px rgba(255,255,255,.12);font-size:13px}
+.win.narrow{width:420px}
+.win.light{background:#f5f5f7;color:#1d1d1f}
+.win.dark{background:#1e1e20;color:#f5f5f7}
+.lights{position:absolute;top:14px;left:14px;display:flex;gap:8px;z-index:3}
+.lights i{width:12px;height:12px;border-radius:50%;display:block}
+.lights i:nth-child(1){background:#ff5f57}.lights i:nth-child(2){background:#febc2e}.lights i:nth-child(3){background:#28c840}
+
+/* shared atoms */
+.dot{width:8px;height:8px;border-radius:50%;display:inline-block;margin-right:6px}
+.dot.g{background:var(--green);box-shadow:0 0 0 3px rgba(48,209,88,.18)}
+.dot.o{background:var(--orange);box-shadow:0 0 0 3px rgba(255,159,10,.18)}
+.dot.r{background:var(--red)}
+.dot.gr{background:#8e8e93}
+.pill{font-size:11px;font-weight:600;padding:2px 8px;border-radius:999px;display:inline-block}
+.pill.g{background:rgba(48,209,88,.16);color:#1f9a44}
+.dark .pill.g{color:#30D158}
+.pill.o{background:rgba(255,159,10,.16);color:#c67600}
+.dark .pill.o{color:#FF9F0A}
+.pill.b{background:rgba(10,132,255,.14);color:#0A84FF}
+.btn{font:inherit;font-size:12px;font-weight:500;padding:5px 12px;border-radius:7px;border:none;cursor:pointer;display:inline-flex;align-items:center;gap:5px}
+.btn.primary{background:var(--blue);color:#fff;box-shadow:0 1px 2px rgba(0,0,0,.2)}
+.btn.sec{background:#fff;color:#1d1d1f;box-shadow:0 0 0 .5px rgba(0,0,0,.18),0 1px 2px rgba(0,0,0,.08)}
+.dark .btn.sec{background:#3a3a3c;color:#f5f5f7;box-shadow:0 0 0 .5px rgba(255,255,255,.12)}
+.btn.ghost{background:transparent;color:var(--blue)}
+.mono{font-family:var(--mono);font-size:12px}
+.muted{color:#86868b}
+.dark .muted{color:#98989d}
+.sf{width:16px;height:16px;display:inline-block;vertical-align:-3px}
+.avatar{width:30px;height:30px;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;font-weight:600;font-size:12px;color:#fff;flex:none}
+
+/* grouped inset list (macOS Settings style) */
+.group{background:#fff;border-radius:10px;box-shadow:0 0 0 .5px rgba(0,0,0,.1),0 1px 1px rgba(0,0,0,.04)}
+.dark .group{background:#2a2a2d;box-shadow:0 0 0 .5px rgba(255,255,255,.08)}
+.row{display:flex;align-items:center;gap:10px;padding:10px 14px;border-bottom:.5px solid rgba(0,0,0,.08)}
+.dark .row{border-color:rgba(255,255,255,.07)}
+.row:last-child{border-bottom:none}
+.row .t{font-weight:500}
+.row .s{font-size:11.5px;color:#86868b;margin-top:1px}
+.dark .row .s{color:#98989d}
+.row .grow{flex:1;min-width:0}
+.glabel{font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.04em;color:#86868b;margin:16px 0 6px 2px}
+.dark .glabel{color:#98989d}
+</style>
+</head>
+<body>
+<h1>lanlink · design explorations</h1>
+<div class="sub">10 directions, all Apple-flavored. Same content model everywhere: Peers (ID, allow request, direct/relayed), Hosting (detected Minecraft world, Share), Tunnels (127.0.0.1:25565), Settings.</div>
+
+<div class="picker" id="picker"></div>
+
+<!-- ===================== 1 ===================== -->
+<section class="variant" data-name="1 · Settings sidebar">
+<p class="vtitle">1 · Settings-style sidebar (light)</p>
+<p class="vdesc">The macOS System Settings idiom: translucent sidebar with SF-style icons, grouped inset lists on the right. Safe, familiar, scales as features grow.</p>
+<div class="win light" style="display:flex">
+  <div class="lights"><i></i><i></i><i></i></div>
+  <style>
+    .v1 .side{width:200px;background:rgba(235,235,240,.85);backdrop-filter:blur(20px);border-right:.5px solid rgba(0,0,0,.1);padding:48px 10px 10px}
+    .v1 .side .me{display:flex;align-items:center;gap:8px;padding:6px 8px;margin-bottom:12px}
+    .v1 .nav{display:flex;align-items:center;gap:8px;padding:6px 8px;border-radius:6px;font-size:13px}
+    .v1 .nav.on{background:var(--blue);color:#fff}
+    .v1 .nav .ic{width:20px;height:20px;border-radius:5px;display:inline-flex;align-items:center;justify-content:center;color:#fff;font-size:11px}
+    .v1 .main{flex:1;padding:14px 22px;overflow:auto}
+    .v1 .hdr{font-size:20px;font-weight:700;letter-spacing:-.02em;margin:26px 0 4px}
+    .v1 .toggle{width:34px;height:20px;border-radius:999px;background:var(--green);position:relative}
+    .v1 .toggle::after{content:"";position:absolute;right:2px;top:2px;width:16px;height:16px;border-radius:50%;background:#fff;box-shadow:0 1px 2px rgba(0,0,0,.3)}
+  </style>
+  <div class="v1" style="display:contents">
+  <div class="side">
+    <div class="me"><span class="avatar" style="background:linear-gradient(135deg,#5ac8fa,#007aff)">JV</span><div><div style="font-weight:600">João</div><div class="muted" style="font-size:11px">Online · Direct</div></div></div>
+    <div class="nav on"><span class="ic" style="background:var(--blue)">●</span>Peers</div>
+    <div class="nav"><span class="ic" style="background:var(--green)">▲</span>Hosting</div>
+    <div class="nav"><span class="ic" style="background:var(--purple)">⇄</span>Tunnels</div>
+    <div class="nav"><span class="ic" style="background:#8e8e93">⚙</span>Settings</div>
+  </div>
+  <div class="main">
+    <div class="hdr">Peers</div>
+    <div class="muted" style="font-size:12px">People who can connect to you, and who you connect to.</div>
+    <div class="glabel">Your ID</div>
+    <div class="group"><div class="row"><div class="grow mono">e3f9…7a21c</div><button class="btn sec">Copy</button></div></div>
+    <div class="glabel">Connected</div>
+    <div class="group">
+      <div class="row"><span class="avatar" style="background:#ff9f0a">A</span><div class="grow"><div class="t">Arthur</div><div class="s"><span class="dot g"></span>Direct · 32 ms</div></div><span class="pill g">Allowed</span><button class="btn ghost">⋯</button></div>
+      <div class="row"><span class="avatar" style="background:#8e8e93">L</span><div class="grow"><div class="t">Lucas</div><div class="s"><span class="dot gr"></span>Offline · last seen yesterday</div></div><span class="pill g">Allowed</span><button class="btn ghost">⋯</button></div>
+    </div>
+    <div class="glabel">Requests</div>
+    <div class="group"><div class="row"><span class="avatar" style="background:#bf5af2">M</span><div class="grow"><div class="t">Mateus wants to connect</div><div class="s mono">9b0c…41de</div></div><button class="btn sec">Ignore</button><button class="btn primary">Allow</button></div></div>
+    <div style="margin-top:12px"><button class="btn sec">+ Add peer…</button></div>
+  </div>
+  </div>
+</div>
+</section>
+
+<!-- ===================== 2 ===================== -->
+<section class="variant" data-name="2 · Dark vibrancy">
+<p class="vtitle">2 · Dark vibrancy sidebar</p>
+<p class="vdesc">Same structure as #1, in dark mode with a frosted sidebar and a toolbar title. Feels like Music / Xcode in dark. Good fit for a gaming audience.</p>
+<div class="win dark" style="display:flex;background:#1a1a1c">
+  <div class="lights"><i></i><i></i><i></i></div>
+  <style>
+    .v2 .side{width:190px;background:rgba(40,40,44,.6);backdrop-filter:blur(30px);border-right:.5px solid rgba(255,255,255,.08);padding:48px 10px 10px}
+    .v2 .nav{display:flex;align-items:center;gap:8px;padding:6px 8px;border-radius:6px;font-size:13px;color:#d9d9de}
+    .v2 .nav.on{background:rgba(255,255,255,.12);color:#fff}
+    .v2 .nav .ic{width:18px;text-align:center;color:var(--blue)}
+    .v2 .main{flex:1;display:flex;flex-direction:column}
+    .v2 .bar{height:52px;display:flex;align-items:center;justify-content:space-between;padding:0 18px;border-bottom:.5px solid rgba(255,255,255,.08);font-weight:600;font-size:15px}
+    .v2 .content{padding:18px;overflow:auto}
+  </style>
+  <div class="v2" style="display:contents">
+  <div class="side">
+    <div class="nav on"><span class="ic">◉</span>Peers</div>
+    <div class="nav"><span class="ic">▲</span>Hosting</div>
+    <div class="nav"><span class="ic">⇄</span>Tunnels</div>
+    <div style="height:14px"></div>
+    <div class="nav"><span class="ic" style="color:#98989d">⚙</span>Settings</div>
+    <div style="position:absolute;bottom:14px;left:14px;font-size:11px;color:#98989d"><span class="dot g"></span>Online · Direct</div>
+  </div>
+  <div class="main">
+    <div class="bar"><span>Peers</span><div><button class="btn sec">Copy my ID</button> <button class="btn primary">Add</button></div></div>
+    <div class="content">
+      <div class="group" style="background:rgba(255,255,255,.05)">
+        <div class="row" style="padding:14px"><span class="avatar" style="background:#bf5af2">M</span><div class="grow"><div class="t">Mateus wants to connect</div><div class="s mono">9b0c…41de</div></div><button class="btn sec">Ignore</button><button class="btn primary">Allow</button></div>
+      </div>
+      <div class="glabel">Peers</div>
+      <div class="group">
+        <div class="row" style="padding:12px 14px"><span class="avatar" style="background:#ff9f0a">A</span><div class="grow"><div class="t">Arthur</div><div class="s">Direct · 32 ms · ↓ 1.2 MB/s</div></div><span class="pill g">Connected</span></div>
+        <div class="row" style="padding:12px 14px"><span class="avatar" style="background:#64d2ff">P</span><div class="grow"><div class="t">Pedro</div><div class="s">Relayed · 118 ms</div></div><span class="pill o">Relayed</span></div>
+        <div class="row" style="padding:12px 14px"><span class="avatar" style="background:#636366">L</span><div class="grow"><div class="t">Lucas</div><div class="s">Offline</div></div><button class="btn ghost">Reconnect</button></div>
+      </div>
+    </div>
+  </div>
+  </div>
+</div>
+</section>
+
+<!-- ===================== 3 ===================== -->
+<section class="variant" data-name="3 · Menu bar popover">
+<p class="vtitle">3 · Menu bar / tray popover</p>
+<p class="vdesc">Tailscale-style: lives in the tray, one compact popover. Big on/off, peers as a flat list, tunnels inline. Minimal, fastest to glance at while gaming.</p>
+<div style="display:flex;gap:30px;align-items:flex-start">
+<div class="win light" style="width:340px;height:430px;border-radius:14px;background:rgba(245,245,247,.92);backdrop-filter:blur(30px)">
+  <style>
+    .v3 .top{display:flex;align-items:center;justify-content:space-between;padding:14px 16px 10px}
+    .v3 .item{display:flex;align-items:center;gap:10px;padding:8px 16px}
+    .v3 .item:hover{background:rgba(0,0,0,.04)}
+    .v3 .sep{height:.5px;background:rgba(0,0,0,.1);margin:6px 12px}
+    .v3 .sw{width:40px;height:24px;border-radius:999px;background:var(--green);position:relative}
+    .v3 .sw::after{content:"";position:absolute;right:2px;top:2px;width:20px;height:20px;border-radius:50%;background:#fff;box-shadow:0 1px 3px rgba(0,0,0,.3)}
+    .v3 .sec{padding:6px 16px 2px;font-size:11px;font-weight:600;color:#86868b}
+  </style>
+  <div class="v3">
+    <div class="top"><div><div style="font-weight:700;font-size:15px">lanlink</div><div class="muted" style="font-size:11px">Connected · Direct</div></div><div class="sw"></div></div>
+    <div class="sep"></div>
+    <div class="sec">THIS DEVICE</div>
+    <div class="item"><span class="avatar" style="background:linear-gradient(135deg,#5ac8fa,#007aff)">JV</span><div style="flex:1"><div style="font-weight:500">João</div><div class="mono muted">e3f9…7a21c</div></div><button class="btn ghost">Copy</button></div>
+    <div class="sep"></div>
+    <div class="sec">PEERS</div>
+    <div class="item"><span class="dot g"></span><div style="flex:1">Arthur</div><span class="muted" style="font-size:11px">32 ms</span></div>
+    <div class="item"><span class="dot o"></span><div style="flex:1">Pedro</div><span class="muted" style="font-size:11px">relayed</span></div>
+    <div class="item"><span class="dot gr"></span><div style="flex:1;color:#86868b">Lucas</div></div>
+    <div class="sep"></div>
+    <div class="sec">TUNNELS</div>
+    <div class="item"><div style="flex:1">Minecraft · Arthur</div><span class="mono" style="color:var(--blue)">127.0.0.1:25565</span></div>
+    <div class="sep"></div>
+    <div class="item muted">Settings…</div>
+    <div class="item muted">Quit lanlink</div>
+  </div>
+</div>
+<div class="win light" style="width:340px;height:430px;border-radius:14px;background:rgba(245,245,247,.92);display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:30px">
+  <div style="width:64px;height:64px;border-radius:50%;background:rgba(191,90,242,.15);display:flex;align-items:center;justify-content:center;font-size:26px;margin-bottom:14px">🔔</div>
+  <div style="font-weight:700;font-size:16px">Mateus wants to connect</div>
+  <div class="muted mono" style="margin:4px 0 20px">9b0c…41de</div>
+  <div style="display:flex;gap:8px"><button class="btn sec" style="padding:8px 18px">Ignore</button><button class="btn primary" style="padding:8px 18px">Allow</button></div>
+  <div class="muted" style="font-size:11px;margin-top:22px">Allowing lets Mateus reach the games you share. Nothing else.</div>
+</div>
+</div>
+</section>
+
+<!-- ===================== 4 ===================== -->
+<section class="variant" data-name="4 · Control Center">
+<p class="vtitle">4 · Control Center tiles</p>
+<p class="vdesc">Everything on one screen as glass tiles of varying size. Status, your ID, peers, shared games, tunnels. No tabs at all; sized for a window you keep next to the game.</p>
+<div class="win dark" style="background:radial-gradient(1200px 500px at 20% -10%,#2d2a4a,#141416 60%);padding:46px 18px 18px">
+  <div class="lights"><i></i><i></i><i></i></div>
+  <style>
+    .v4 .grid{display:grid;grid-template-columns:repeat(4,1fr);grid-auto-rows:100px;gap:12px}
+    .v4 .tile{background:rgba(255,255,255,.08);backdrop-filter:blur(20px);border:.5px solid rgba(255,255,255,.1);border-radius:18px;padding:14px;position:relative}
+    .v4 .tile h4{margin:0 0 6px;font-size:12px;font-weight:600;color:#c7c7cc}
+    .v4 .big{font-size:22px;font-weight:700;letter-spacing:-.02em}
+    .v4 .peer{display:flex;align-items:center;gap:8px;padding:5px 0;font-size:12.5px}
+  </style>
+  <div class="v4 grid">
+    <div class="tile" style="grid-column:span 2"><h4>Status</h4><div class="big"><span class="dot g"></span>Online</div><div class="muted" style="font-size:12px">Direct to Arthur · 32 ms · jitter 2 ms</div></div>
+    <div class="tile" style="grid-column:span 2"><h4>Your ID</h4><div class="mono" style="font-size:14px;margin-top:6px">e3f9 2a71 … 7a21c</div><button class="btn sec" style="position:absolute;right:12px;top:12px">Copy</button></div>
+    <div class="tile" style="grid-column:span 2;grid-row:span 2"><h4>Peers</h4>
+      <div class="peer"><span class="avatar" style="width:24px;height:24px;background:#ff9f0a">A</span>Arthur<span class="muted" style="margin-left:auto">32 ms</span></div>
+      <div class="peer"><span class="avatar" style="width:24px;height:24px;background:#64d2ff">P</span>Pedro<span class="pill o" style="margin-left:auto">Relayed</span></div>
+      <div class="peer"><span class="avatar" style="width:24px;height:24px;background:#636366">L</span><span class="muted">Lucas</span><span class="muted" style="margin-left:auto">offline</span></div>
+      <div class="peer" style="margin-top:6px;border-top:.5px solid rgba(255,255,255,.1);padding-top:10px"><span class="avatar" style="width:24px;height:24px;background:#bf5af2">M</span>Mateus<span style="margin-left:auto;display:flex;gap:4px"><button class="btn sec">Ignore</button><button class="btn primary">Allow</button></span></div>
+    </div>
+    <div class="tile" style="grid-column:span 2"><h4>Hosting</h4><div style="display:flex;align-items:center;gap:8px"><div style="flex:1"><div style="font-weight:600">Minecraft · "Survival"</div><div class="muted" style="font-size:11.5px">LAN port 54321 · detected</div></div><button class="btn primary">Share</button></div></div>
+    <div class="tile" style="grid-column:span 2"><h4>Tunnels</h4><div style="display:flex;align-items:center;gap:8px"><div style="flex:1"><div style="font-weight:600">Minecraft from Arthur</div><div class="mono" style="color:var(--teal)">127.0.0.1:25565</div></div><button class="btn sec">Copy</button></div></div>
+    <div class="tile" style="grid-column:span 4;grid-row:span 1;display:flex;align-items:center;gap:14px"><span style="font-size:20px">⚙</span><div style="flex:1"><div style="font-weight:600">Settings</div><div class="muted" style="font-size:11.5px">Display name, relay server, logs</div></div><span class="muted">›</span></div>
+  </div>
+</div>
+</section>
+
+<!-- ===================== 5 ===================== -->
+<section class="variant" data-name="5 · iOS tab bar">
+<p class="vtitle">5 · Tall narrow window with bottom tab bar</p>
+<p class="vdesc">iPhone-app proportions in a desktop window. Large title, bottom tab bar, inset grouped lists. Tiny footprint next to a fullscreen game.</p>
+<div style="display:flex;gap:24px">
+<div class="win light narrow" style="height:560px;display:flex;flex-direction:column;background:#f2f2f7">
+  <div class="lights"><i></i><i></i><i></i></div>
+  <style>
+    .v5 .lt{font-size:28px;font-weight:800;letter-spacing:-.03em;padding:46px 18px 8px}
+    .v5 .body{flex:1;overflow:auto;padding:0 16px}
+    .v5 .tabs{height:58px;border-top:.5px solid rgba(0,0,0,.12);background:rgba(249,249,249,.9);backdrop-filter:blur(20px);display:flex}
+    .v5 .tab{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;font-size:10px;color:#8e8e93}
+    .v5 .tab.on{color:var(--blue)}
+    .v5 .tab b{font-size:18px;font-weight:400}
+  </style>
+  <div class="v5" style="display:contents">
+    <div class="lt">Peers</div>
+    <div class="body">
+      <div class="group"><div class="row"><div class="grow"><div class="s">YOUR ID</div><div class="mono">e3f9…7a21c</div></div><button class="btn ghost">Copy</button></div></div>
+      <div class="glabel">Requests</div>
+      <div class="group"><div class="row"><span class="avatar" style="background:#bf5af2">M</span><div class="grow"><div class="t">Mateus</div><div class="s">wants to connect</div></div><button class="btn primary">Allow</button></div></div>
+      <div class="glabel">Peers</div>
+      <div class="group">
+        <div class="row"><span class="avatar" style="background:#ff9f0a">A</span><div class="grow"><div class="t">Arthur</div><div class="s">Direct · 32 ms</div></div><span class="dot g"></span></div>
+        <div class="row"><span class="avatar" style="background:#64d2ff">P</span><div class="grow"><div class="t">Pedro</div><div class="s">Relayed · 118 ms</div></div><span class="dot o"></span></div>
+        <div class="row"><span class="avatar" style="background:#636366">L</span><div class="grow"><div class="t">Lucas</div><div class="s">Offline</div></div><span class="dot gr"></span></div>
+      </div>
+      <div style="text-align:center;margin:16px 0"><button class="btn ghost">+ Add Peer</button></div>
+    </div>
+    <div class="tabs"><div class="tab on"><b>◉</b>Peers</div><div class="tab"><b>▲</b>Hosting</div><div class="tab"><b>⇄</b>Tunnels</div><div class="tab"><b>⚙</b>Settings</div></div>
+  </div>
+</div>
+<div class="win light narrow" style="height:560px;display:flex;flex-direction:column;background:#f2f2f7">
+  <div class="lights"><i></i><i></i><i></i></div>
+  <div class="v5" style="display:contents">
+    <div class="lt">Hosting</div>
+    <div class="body">
+      <div class="glabel">Detected</div>
+      <div class="group"><div class="row"><span class="avatar" style="background:#3a9d3a;border-radius:7px">⛏</span><div class="grow"><div class="t">Minecraft · Survival</div><div class="s">Port 54321 · open to LAN</div></div><button class="btn primary">Share</button></div></div>
+      <div class="glabel">Shared</div>
+      <div class="group"><div class="row"><span class="avatar" style="background:#3a9d3a;border-radius:7px">⛏</span><div class="grow"><div class="t">Minecraft</div><div class="s">Port 25565 · 1 player connected</div></div><span class="pill g">Sharing</span></div></div>
+      <div class="glabel">Manual</div>
+      <div class="group"><div class="row"><div class="grow muted">Add a service by port…</div><span class="muted">›</span></div></div>
+      <div class="muted" style="font-size:11px;padding:12px 4px">Minecraft picks a new port each time you open to LAN. Share it again after restarting.</div>
+    </div>
+    <div class="tabs"><div class="tab"><b>◉</b>Peers</div><div class="tab on"><b>▲</b>Hosting</div><div class="tab"><b>⇄</b>Tunnels</div><div class="tab"><b>⚙</b>Settings</div></div>
+  </div>
+</div>
+</div>
+</section>
+
+<!-- ===================== 6 ===================== -->
+<section class="variant" data-name="6 · Segmented toolbar">
+<p class="vtitle">6 · Unified toolbar with segmented control</p>
+<p class="vdesc">No sidebar. A single tall toolbar holds the status, a segmented control for the four sections, and the primary action. Maximum content width. Like Finder's view switcher.</p>
+<div class="win light" style="display:flex;flex-direction:column">
+  <div class="lights"><i></i><i></i><i></i></div>
+  <style>
+    .v6 .tb{height:52px;display:flex;align-items:center;justify-content:space-between;padding:0 16px 0 90px;background:rgba(236,236,238,.9);border-bottom:.5px solid rgba(0,0,0,.12)}
+    .v6 .seg{display:flex;background:rgba(0,0,0,.06);border-radius:8px;padding:2px}
+    .v6 .seg span{padding:4px 14px;border-radius:6px;font-size:12px;font-weight:500}
+    .v6 .seg span.on{background:#fff;box-shadow:0 1px 3px rgba(0,0,0,.15)}
+    .v6 table{width:100%;border-collapse:collapse;font-size:12.5px}
+    .v6 th{text-align:left;font-weight:500;color:#86868b;font-size:11px;padding:8px 14px;border-bottom:.5px solid rgba(0,0,0,.1)}
+    .v6 td{padding:9px 14px;border-bottom:.5px solid rgba(0,0,0,.06)}
+    .v6 tr:nth-child(even) td{background:rgba(0,0,0,.025)}
+  </style>
+  <div class="v6" style="display:contents">
+    <div class="tb"><span style="font-size:12px"><span class="dot g"></span>Online · <span class="mono">e3f9…7a21c</span> <button class="btn ghost" style="padding:2px 6px">Copy</button></span>
+      <div class="seg"><span class="on">Peers</span><span>Hosting</span><span>Tunnels</span><span>Settings</span></div>
+      <button class="btn primary">+ Add Peer</button></div>
+    <div style="background:#fff7e6;border-bottom:.5px solid #f0d9a8;padding:8px 16px;display:flex;align-items:center;gap:10px;font-size:12.5px"><span>🔔</span><span style="flex:1"><b>Mateus</b> wants to connect · <span class="mono muted">9b0c…41de</span></span><button class="btn sec">Ignore</button><button class="btn primary">Allow</button></div>
+    <table>
+      <tr><th>Name</th><th>Status</th><th>Path</th><th>Latency</th><th>ID</th><th></th></tr>
+      <tr><td><span class="avatar" style="width:22px;height:22px;background:#ff9f0a;margin-right:8px">A</span>Arthur</td><td><span class="dot g"></span>Connected</td><td>Direct</td><td>32 ms</td><td class="mono muted">7f1a…c902</td><td><button class="btn ghost">⋯</button></td></tr>
+      <tr><td><span class="avatar" style="width:22px;height:22px;background:#64d2ff;margin-right:8px">P</span>Pedro</td><td><span class="dot o"></span>Connected</td><td>Relayed</td><td>118 ms</td><td class="mono muted">22cb…08e1</td><td><button class="btn ghost">⋯</button></td></tr>
+      <tr><td><span class="avatar" style="width:22px;height:22px;background:#636366;margin-right:8px">L</span>Lucas</td><td><span class="dot gr"></span>Offline</td><td>—</td><td>—</td><td class="mono muted">a91d…55f0</td><td><button class="btn ghost">Reconnect</button></td></tr>
+    </table>
+    <div style="margin-top:auto;padding:8px 16px;border-top:.5px solid rgba(0,0,0,.1);font-size:11px;color:#86868b;display:flex;justify-content:space-between"><span>3 peers · 1 request</span><span>Relay: relay.lanlink.app (standby)</span></div>
+  </div>
+</div>
+</section>
+
+<!-- ===================== 7 ===================== -->
+<section class="variant" data-name="7 · Status hero">
+<p class="vtitle">7 · Status-first hero</p>
+<p class="vdesc">The connection quality is the product. A big ring with the latency in the middle, Apple Watch / Battery style, then the two things you need: who is connected and the address to paste into Minecraft.</p>
+<div class="win dark" style="background:linear-gradient(180deg,#0f1f14 0%,#121214 45%);display:flex;flex-direction:column;align-items:center;padding:40px 24px 20px">
+  <div class="lights"><i></i><i></i><i></i></div>
+  <style>
+    .v7 .ring{width:150px;height:150px;border-radius:50%;background:conic-gradient(var(--green) 0 78%,rgba(255,255,255,.08) 78% 100%);display:flex;align-items:center;justify-content:center;position:relative;margin:4px 0 12px}
+    .v7 .ring::before{content:"";position:absolute;inset:12px;border-radius:50%;background:#121214}
+    .v7 .ring div{position:relative;text-align:center}
+    .v7 .ring b{font-size:34px;font-weight:700;letter-spacing:-.03em;display:block;line-height:1}
+    .v7 .cards{display:flex;gap:12px;width:100%;margin-top:18px}
+    .v7 .card{flex:1;background:rgba(255,255,255,.06);border:.5px solid rgba(255,255,255,.08);border-radius:14px;padding:12px 14px}
+    .v7 .card h5{margin:0 0 8px;font-size:11px;color:#98989d;font-weight:600;text-transform:uppercase;letter-spacing:.04em}
+    .v7 .nav{position:absolute;top:14px;right:16px;display:flex;gap:4px}
+    .v7 .nav span{padding:4px 10px;border-radius:6px;font-size:12px;color:#98989d}
+    .v7 .nav span.on{background:rgba(255,255,255,.1);color:#fff}
+  </style>
+  <div class="v7" style="display:contents">
+    <div class="nav"><span class="on">Home</span><span>Peers</span><span>Hosting</span><span>Settings</span></div>
+    <div class="ring"><div><b>32</b><span class="muted" style="font-size:11px">ms · direct</span></div></div>
+    <div style="font-weight:700;font-size:17px">Connected to Arthur</div>
+    <div class="muted" style="font-size:12px">Jitter 2 ms · No packet loss · 14 min</div>
+    <div class="cards">
+      <div class="card"><h5>Join Arthur's game</h5><div style="display:flex;align-items:center;gap:8px"><span class="mono" style="font-size:14px;color:var(--teal)">127.0.0.1:25565</span><button class="btn sec" style="margin-left:auto">Copy</button></div><div class="muted" style="font-size:11px;margin-top:6px">Minecraft → Multiplayer → Direct Connection</div></div>
+      <div class="card"><h5>You are sharing</h5><div style="display:flex;align-items:center;gap:8px"><span>Minecraft · Survival</span><span class="pill g" style="margin-left:auto">Live</span></div><div class="muted" style="font-size:11px;margin-top:6px">Port 54321 · Arthur connected</div></div>
+    </div>
+    <div class="cards" style="margin-top:12px"><div class="card" style="display:flex;align-items:center;gap:10px;padding:10px 14px"><span class="avatar" style="background:#bf5af2;width:26px;height:26px">M</span><span style="flex:1;font-size:12.5px"><b>Mateus</b> wants to connect</span><button class="btn sec">Ignore</button><button class="btn primary">Allow</button></div></div>
+  </div>
+</div>
+</section>
+
+<!-- ===================== 8 ===================== -->
+<section class="variant" data-name="8 · Three-column inspector">
+<p class="vtitle">8 · Three-column with inspector</p>
+<p class="vdesc">Mail / Xcode layout: sources, a list, and a detail pane for the selected peer with everything about them (path, latency, tunnels they expose, allow/revoke). For users who want to see what's going on under the hood.</p>
+<div class="win light" style="display:flex">
+  <div class="lights"><i></i><i></i><i></i></div>
+  <style>
+    .v8 .c1{width:150px;background:rgba(235,235,240,.9);border-right:.5px solid rgba(0,0,0,.1);padding:46px 8px 8px}
+    .v8 .c1 div{padding:5px 8px;border-radius:5px;font-size:12.5px}
+    .v8 .c1 div.on{background:rgba(0,0,0,.08)}
+    .v8 .c2{width:230px;border-right:.5px solid rgba(0,0,0,.1);background:#fff;padding-top:40px}
+    .v8 .li{padding:10px 12px;border-bottom:.5px solid rgba(0,0,0,.06);display:flex;gap:8px;align-items:center}
+    .v8 .li.on{background:var(--blue);color:#fff}
+    .v8 .li.on .muted{color:rgba(255,255,255,.75)}
+    .v8 .c3{flex:1;padding:50px 22px 20px;overflow:auto;background:#f9f9fb}
+    .v8 .kv{display:grid;grid-template-columns:110px 1fr;gap:6px 10px;font-size:12.5px;margin:10px 0}
+    .v8 .kv span:nth-child(odd){color:#86868b;text-align:right}
+    .v8 .search{margin:0 10px 8px;background:rgba(0,0,0,.05);border-radius:6px;padding:5px 8px;font-size:12px;color:#86868b}
+  </style>
+  <div class="v8" style="display:contents">
+    <div class="c1"><div class="on">◉ Peers</div><div>▲ Hosting</div><div>⇄ Tunnels</div><div style="margin-top:10px">⚙ Settings</div></div>
+    <div class="c2">
+      <div class="search">⌕ Search</div>
+      <div class="li on"><span class="avatar" style="background:#ff9f0a">A</span><div><div style="font-weight:600">Arthur</div><div class="muted" style="font-size:11px">Direct · 32 ms</div></div></div>
+      <div class="li"><span class="avatar" style="background:#64d2ff">P</span><div><div style="font-weight:600">Pedro</div><div class="muted" style="font-size:11px">Relayed · 118 ms</div></div></div>
+      <div class="li"><span class="avatar" style="background:#636366">L</span><div><div style="font-weight:600">Lucas</div><div class="muted" style="font-size:11px">Offline</div></div></div>
+      <div class="li"><span class="avatar" style="background:#bf5af2">M</span><div><div style="font-weight:600">Mateus</div><div class="muted" style="font-size:11px">Wants to connect</div></div><span class="pill b" style="margin-left:auto">1</span></div>
+    </div>
+    <div class="c3">
+      <div style="display:flex;align-items:center;gap:12px"><span class="avatar" style="width:44px;height:44px;font-size:17px;background:#ff9f0a">A</span><div><div style="font-size:18px;font-weight:700;letter-spacing:-.02em">Arthur</div><div class="muted mono" style="font-size:11px">7f1a 90e2 … c902</div></div><div style="margin-left:auto;display:flex;gap:6px"><button class="btn sec">Rename</button><button class="btn sec" style="color:var(--red)">Remove</button></div></div>
+      <div class="glabel">Connection</div>
+      <div class="group"><div class="kv" style="padding:4px 12px;margin:0"><span>Status</span><span><span class="dot g"></span>Connected</span><span>Path</span><span>Direct (hole-punched)</span><span>Latency</span><span>32 ms · jitter 2 ms</span><span>Addresses</span><span class="mono">189.12.33.7:51820</span><span>Since</span><span>14 minutes ago</span></div></div>
+      <div class="glabel">Games Arthur shares</div>
+      <div class="group"><div class="row"><div class="grow"><div class="t">Minecraft</div><div class="s">Available locally at <span class="mono">127.0.0.1:25565</span></div></div><button class="btn sec">Copy</button></div></div>
+      <div class="glabel">Permissions</div>
+      <div class="group"><div class="row"><div class="grow"><div class="t">Allowed to connect</div><div class="s">Can reach the services you share</div></div><span class="pill g">On</span></div></div>
+    </div>
+  </div>
+</div>
+</section>
+
+<!-- ===================== 9 ===================== -->
+<section class="variant" data-name="9 · Guided flow">
+<p class="vtitle">9 · Guided card flow</p>
+<p class="vdesc">AirPods-pairing energy. For the friend who has never seen a VPN: one card at a time, a single next action, nothing else on screen. Hides the four tabs behind a tiny "Advanced" link.</p>
+<div style="display:flex;gap:20px">
+<div class="win light" style="width:360px;height:440px;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:30px;background:#fff">
+  <div class="lights"><i></i><i></i><i></i></div>
+  <div style="width:88px;height:88px;border-radius:24px;background:linear-gradient(145deg,#34c759,#0a84ff);margin-bottom:18px;box-shadow:0 10px 30px rgba(10,132,255,.3)"></div>
+  <div style="font-size:20px;font-weight:700;letter-spacing:-.02em">Are you hosting or joining?</div>
+  <div class="muted" style="font-size:12.5px;margin:6px 0 22px">You can change this later.</div>
+  <button class="btn primary" style="width:100%;padding:10px;font-size:13px;border-radius:10px">I'm hosting the game</button>
+  <button class="btn sec" style="width:100%;padding:10px;font-size:13px;border-radius:10px;margin-top:8px">I'm joining a friend</button>
+  <div class="muted" style="font-size:11px;margin-top:26px">Advanced</div>
+</div>
+<div class="win light" style="width:360px;height:440px;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:30px;background:#fff">
+  <div class="lights"><i></i><i></i><i></i></div>
+  <div class="muted" style="font-size:11px;font-weight:600;letter-spacing:.06em">STEP 2 OF 3</div>
+  <div style="font-size:20px;font-weight:700;letter-spacing:-.02em;margin-top:6px">Send this to your friend</div>
+  <div class="mono" style="font-size:15px;background:#f2f2f7;border-radius:10px;padding:12px 16px;margin:18px 0 8px;letter-spacing:.02em">e3f9 2a71 b8c4 7a21c</div>
+  <button class="btn primary" style="padding:8px 18px">Copy ID</button>
+  <div class="muted" style="font-size:12px;margin-top:22px;display:flex;align-items:center;gap:8px"><span style="width:12px;height:12px;border:2px solid #d1d1d6;border-top-color:var(--blue);border-radius:50%;display:inline-block;animation:sp 1s linear infinite"></span>Waiting for your friend to connect…</div>
+  <style>@keyframes sp{to{transform:rotate(360deg)}}</style>
+</div>
+<div class="win light" style="width:360px;height:440px;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:30px;background:#fff">
+  <div class="lights"><i></i><i></i><i></i></div>
+  <div style="width:64px;height:64px;border-radius:50%;background:rgba(48,209,88,.15);display:flex;align-items:center;justify-content:center;font-size:30px;color:var(--green);margin-bottom:14px">✓</div>
+  <div style="font-size:20px;font-weight:700;letter-spacing:-.02em">Arthur is connected</div>
+  <div class="muted" style="font-size:12.5px;margin:6px 0 18px">Direct · 32 ms. In Minecraft, open your world to LAN.</div>
+  <div class="group" style="width:100%;text-align:left"><div class="row"><span class="avatar" style="background:#3a9d3a;border-radius:7px">⛏</span><div class="grow"><div class="t">Minecraft · Survival</div><div class="s">Found on port 54321</div></div><button class="btn primary">Share</button></div></div>
+  <div class="muted" style="font-size:11px;margin-top:22px">Advanced</div>
+</div>
+</div>
+</section>
+
+<!-- ===================== 10 ===================== -->
+<section class="variant" data-name="10 · Game Center glass">
+<p class="vtitle">10 · Game Center glass, dark with accent</p>
+<p class="vdesc">A more expressive take: deep gradient backdrop, layered glass, a colored accent per peer, big friendly avatars. Still Apple restraint on type and spacing, but feels like a game launcher.</p>
+<div class="win dark" style="background:radial-gradient(900px 420px at 85% 0%,#1e3b5a,transparent 60%),radial-gradient(700px 400px at 0% 100%,#2b1e4a,transparent 60%),#0d0d10;padding:48px 20px 20px;display:flex;flex-direction:column">
+  <div class="lights"><i></i><i></i><i></i></div>
+  <style>
+    .v10 .top{display:flex;align-items:center;gap:10px;margin-bottom:16px}
+    .v10 .tabs{display:flex;gap:2px;background:rgba(255,255,255,.08);padding:3px;border-radius:10px;margin-left:auto}
+    .v10 .tabs span{padding:5px 12px;border-radius:8px;font-size:12px;color:#c7c7cc}
+    .v10 .tabs span.on{background:rgba(255,255,255,.16);color:#fff}
+    .v10 .glass{background:rgba(255,255,255,.07);backdrop-filter:blur(24px);border:.5px solid rgba(255,255,255,.12);border-radius:20px;padding:16px;box-shadow:inset 0 1px 0 rgba(255,255,255,.08)}
+    .v10 .peers{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}
+    .v10 .pc{border-radius:16px;padding:14px;background:rgba(255,255,255,.05);border:.5px solid rgba(255,255,255,.1);position:relative;overflow:hidden}
+    .v10 .pc .glow{position:absolute;inset:-40px -40px auto auto;width:120px;height:120px;border-radius:50%;filter:blur(30px);opacity:.5}
+    .v10 .pc .name{font-weight:700;font-size:14px;margin-top:10px}
+  </style>
+  <div class="v10" style="display:contents">
+    <div class="top"><span class="avatar" style="background:linear-gradient(135deg,#5ac8fa,#007aff);width:34px;height:34px">JV</span><div><div style="font-weight:700">João</div><div class="muted" style="font-size:11px"><span class="dot g"></span>Online · <span class="mono">e3f9…7a21c</span></div></div>
+      <div class="tabs"><span class="on">Peers</span><span>Hosting</span><span>Tunnels</span><span>Settings</span></div></div>
+    <div class="peers">
+      <div class="pc"><div class="glow" style="background:var(--orange)"></div><span class="avatar" style="background:#ff9f0a;width:40px;height:40px;font-size:15px">A</span><div class="name">Arthur</div><div class="muted" style="font-size:11.5px">Direct · 32 ms</div><div style="margin-top:10px"><span class="pill g">Playing Minecraft</span></div></div>
+      <div class="pc"><div class="glow" style="background:var(--teal)"></div><span class="avatar" style="background:#64d2ff;width:40px;height:40px;font-size:15px">P</span><div class="name">Pedro</div><div class="muted" style="font-size:11.5px">Relayed · 118 ms</div><div style="margin-top:10px"><span class="pill o">Relayed</span></div></div>
+      <div class="pc" style="opacity:.6"><span class="avatar" style="background:#48484a;width:40px;height:40px;font-size:15px">L</span><div class="name">Lucas</div><div class="muted" style="font-size:11.5px">Offline</div><div style="margin-top:10px"><button class="btn sec">Reconnect</button></div></div>
+    </div>
+    <div class="glass" style="margin-top:12px;display:flex;align-items:center;gap:12px"><span class="avatar" style="background:#bf5af2;width:34px;height:34px">M</span><div style="flex:1"><div style="font-weight:600">Mateus wants to join</div><div class="muted mono" style="font-size:11px">9b0c…41de</div></div><button class="btn sec">Ignore</button><button class="btn primary">Allow</button></div>
+    <div style="margin-top:auto;display:flex;gap:12px">
+      <div class="glass" style="flex:1;padding:12px 14px"><div class="muted" style="font-size:11px;font-weight:600">JOIN ARTHUR</div><div class="mono" style="font-size:14px;color:var(--teal);margin-top:4px">127.0.0.1:25565</div></div>
+      <div class="glass" style="flex:1;padding:12px 14px;display:flex;align-items:center;gap:8px"><div style="flex:1"><div class="muted" style="font-size:11px;font-weight:600">YOU SHARE</div><div style="margin-top:4px">Minecraft · Survival</div></div><span class="pill g">Live</span></div>
+    </div>
+  </div>
+</div>
+</section>
+
+<script>
+const vs=[...document.querySelectorAll('.variant')],p=document.getElementById('picker');
+vs.forEach((v,i)=>{const b=document.createElement('button');b.textContent=v.dataset.name;b.onclick=()=>show(i);p.appendChild(b)});
+function show(i){vs.forEach((v,j)=>v.classList.toggle('on',i===j));[...p.children].forEach((b,j)=>b.classList.toggle('on',i===j));location.hash=i+1}
+show(Math.max(0,(parseInt(location.hash.slice(1))||1)-1));
+</script>
+</body>
+</html>

@@ -1,78 +1,166 @@
-//! Settings tab.
+//! Settings pane: identity, network, appearance, files.
 
-use gpui::{div, prelude::*, rgb, Context};
+use gpui::{div, prelude::*, px, ClipboardItem, Context};
 use lanlink_core::Config;
 
-use crate::state::Root;
-use crate::theme::*;
+use crate::state::{MenuKind, Root};
+use crate::views::peers::pane_header;
 use crate::widgets::*;
 
 impl Root {
     pub fn render_settings(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
-        let name = card(Some("Your name"))
-            .child(small("Shown to your friends when you connect."))
+        let t = theme(cx);
+        let my_id = self.node.as_ref().map(|n| n.id().to_string());
+
+        let identity = group(&t)
             .child(
-                row().child(self.inputs.display_name.clone()).child(
-                    button("save-name", "Save", ACCENT)
-                        .on_click(cx.listener(|this, _, _, cx| this.save_display_name(cx))),
-                ),
+                group_row(&t, false)
+                    .child(title_sub(&t, "Display name", Some("Shown to your peers")))
+                    .child(
+                        div()
+                            .w(px(200.))
+                            .flex()
+                            .child(self.inputs.display_name.clone()),
+                    )
+                    .child(
+                        button(&t, "save-name", None, "Save", ButtonKind::Secondary)
+                            .on_click(cx.listener(|this, _, _, cx| this.save_display_name(cx))),
+                    ),
+            )
+            .child(
+                group_row(&t, true)
+                    .child(title_sub(
+                        &t,
+                        "Your ID",
+                        Some(my_id.clone().unwrap_or_else(|| "Starting…".into())),
+                    ))
+                    .when_some(my_id, |el, id| {
+                        el.child(
+                            button(
+                                &t,
+                                "copy-id-settings",
+                                Some("copy"),
+                                "Copy",
+                                ButtonKind::Secondary,
+                            )
+                            .on_click(cx.listener(
+                                move |this, _, _, cx| {
+                                    cx.write_to_clipboard(ClipboardItem::new_string(id.clone()));
+                                    this.show_toast("ID copied", false, cx);
+                                },
+                            )),
+                        )
+                    }),
             );
 
-        let relay = card(Some("Custom relay"))
-            .child(small("Leave empty to use the free public relays."))
+        let relay_sub = if self.restart_required {
+            "Restart lanlink to use the new relay"
+        } else {
+            "Used only when a direct path fails. Empty = public relays."
+        };
+        let network = group(&t)
             .child(
-                row().child(self.inputs.relay_url.clone()).child(
-                    button("save-relay", "Save", ACCENT)
-                        .on_click(cx.listener(|this, _, _, cx| this.save_relay_url(cx))),
-                ),
+                group_row(&t, false)
+                    .child(title_sub(&t, "Relay server", Some(relay_sub)))
+                    .child(
+                        div()
+                            .w(px(200.))
+                            .flex()
+                            .child(self.inputs.relay_url.clone()),
+                    )
+                    .child(
+                        button(&t, "save-relay", None, "Save", ButtonKind::Secondary)
+                            .on_click(cx.listener(|this, _, _, cx| this.save_relay_url(cx))),
+                    ),
             )
-            .when(self.restart_required, |el| {
-                el.child(
-                    div()
-                        .text_xs()
-                        .text_color(rgb(AMBER))
-                        .child("Restart lanlink to use the new relay."),
-                )
-            });
-
-        let lan = card(Some("Minecraft")).child(
-            switch(
-                "lan-detect",
-                !self.config.disable_lan_detection,
-                "Detect \"Open to LAN\" worlds on this computer",
-            )
-            .on_click(cx.listener(|this, _, _, cx| {
-                this.toggle_lan_detection();
-                cx.notify();
-            })),
-        );
-
-        let folders = card(Some("Files"))
             .child(
-                row()
-                    .child(button("open-logs", "Open logs folder", BORDER).on_click(
-                        cx.listener(|this, _, _, cx| this.open_folder(Config::logs_dir(), cx)),
+                group_row(&t, true)
+                    .child(title_sub(
+                        &t,
+                        "Detect Minecraft LAN worlds",
+                        Some("Lists worlds opened to LAN on this computer under Hosting"),
                     ))
                     .child(
-                        button("open-config", "Open config folder", BORDER).on_click(
-                            cx.listener(|this, _, _, cx| this.open_folder(Config::dir(), cx)),
+                        toggle(&t, "lan-detect", !self.config.disable_lan_detection).on_click(
+                            cx.listener(|this, _, _, cx| {
+                                this.toggle_lan_detection();
+                                cx.notify();
+                            }),
+                        ),
+                    ),
+            );
+
+        let appearance = group(&t)
+            .child(
+                group_row(&t, false)
+                    .child(title_sub(&t, "Appearance", None::<&str>))
+                    .child(
+                        popup(&t, "appearance", self.prefs.appearance.label()).on_click(
+                            cx.listener(|this, ev: &gpui::ClickEvent, _, cx| {
+                                let at = this.menu_at(ev.position());
+                                this.toggle_menu(MenuKind::Appearance, at, cx);
+                            }),
                         ),
                     ),
             )
-            .child(small(format!(
-                "Latency log: {}",
-                Config::dir().join("latency.csv").display()
-            )));
+            .child(
+                group_row(&t, true)
+                    .child(title_sub(
+                        &t,
+                        "Transparency",
+                        Some("Blur the desktop behind the window"),
+                    ))
+                    .child(
+                        toggle(&t, "transparency", self.prefs.transparency).on_click(cx.listener(
+                            |this, _, _, cx| {
+                                this.prefs.transparency = !this.prefs.transparency;
+                                this.save_prefs(cx);
+                            },
+                        )),
+                    ),
+            );
+
+        let files = group(&t)
+            .child(
+                group_row(&t, false)
+                    .child(title_sub(
+                        &t,
+                        "Logs",
+                        Some(Config::logs_dir().display().to_string()),
+                    ))
+                    .child(
+                        button(&t, "open-logs", None, "Open", ButtonKind::Secondary).on_click(
+                            cx.listener(|this, _, _, cx| this.open_folder(Config::logs_dir(), cx)),
+                        ),
+                    ),
+            )
+            .child(
+                group_row(&t, true)
+                    .child(title_sub(
+                        &t,
+                        "Config",
+                        Some(Config::dir().display().to_string()),
+                    ))
+                    .child(
+                        button(&t, "open-config", None, "Open", ButtonKind::Secondary).on_click(
+                            cx.listener(|this, _, _, cx| this.open_folder(Config::dir(), cx)),
+                        ),
+                    ),
+            );
 
         col()
-            .gap_3()
-            .child(name)
-            .child(relay)
-            .child(lan)
-            .child(folders)
-            .child(small(format!(
-                "lanlink {}",
-                lanlink_core::build_info::describe()
-            )))
+            .child(pane_header(
+                &t,
+                "Settings",
+                &format!("lanlink {}", lanlink_core::build_info::describe()),
+            ))
+            .child(glabel(&t, "Identity"))
+            .child(identity)
+            .child(glabel(&t, "Network"))
+            .child(network)
+            .child(glabel(&t, "Appearance"))
+            .child(appearance)
+            .child(glabel(&t, "Files"))
+            .child(files)
     }
 }

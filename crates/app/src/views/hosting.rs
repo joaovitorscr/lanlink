@@ -1,181 +1,167 @@
-//! Hosting tab: services we share, add form, detected Minecraft LAN worlds.
+//! Hosting pane: detected Minecraft worlds, shared services, add via sheet.
 
-use gpui::{div, prelude::*, rgb, Context};
+use gpui::{prelude::*, Context};
 use lanlink_core::ServiceStatus;
 
-use crate::state::Root;
-use crate::theme::*;
-use crate::views::peers::proto;
+use crate::state::{MenuKind, Root, Sheet};
+use crate::theme::Theme;
+use crate::views::overlays::proto_label;
+use crate::views::peers::pane_header;
 use crate::widgets::*;
 
 impl Root {
     pub fn render_hosting(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
+        let t = theme(cx);
         let services = self.service_list();
-        let nothing_listening = services
-            .iter()
-            .any(|s| s.service.enabled && s.reachable == Some(false));
-
-        let list = card(Some("Shared with friends"))
-            .when(!self.services.available, |el| {
-                el.child(small("Live status not available"))
-            })
-            .when(services.is_empty(), |el| {
-                el.child(muted("Nothing shared yet. Add a service below."))
-            })
-            .children(services.iter().map(|s| self.render_service(s, cx)))
-            .when(nothing_listening, |el| {
-                el.child(small(
-                    "Red means no program is listening on that port. Start the game or server \
-                     first (in Minecraft: Esc → Open to LAN).",
-                ))
-            });
-
-        let add =
-            card(Some("Add service"))
-                .child(
-                    row()
-                        .child(self.inputs.svc_name.clone())
-                        .child(div().w_20().flex().child(self.inputs.svc_port.clone())),
-                )
-                .child(
-                    row()
-                        .child(
-                            button("proto", if self.svc_udp { "UDP" } else { "TCP" }, BORDER)
-                                .on_click(cx.listener(|this, _, _, cx| {
-                                    this.svc_udp = !this.svc_udp;
-                                    cx.notify();
-                                })),
-                        )
-                        .child(switch("svc-mc", self.svc_minecraft, "Minecraft").on_click(
-                            cx.listener(|this, _, _, cx| {
-                                this.svc_minecraft = !this.svc_minecraft;
-                                cx.notify();
-                            }),
-                        ))
-                        .child(div().flex_1())
-                        .child(
-                            button("add-svc", "Add", ACCENT)
-                                .on_click(cx.listener(|this, _, _, cx| this.add_service(cx))),
-                        ),
-                );
-
         let worlds = self.worlds.value.clone();
-        let worlds_card = card(Some("Detected Minecraft worlds"))
-            .when(!self.worlds.available, |el| {
-                el.child(muted("LAN world detection not available"))
-            })
-            .when(self.worlds.available && worlds.is_empty(), |el| {
-                el.child(muted(if self.config.disable_lan_detection {
-                    "Detection is turned off in Settings."
-                } else {
-                    "None right now. In Minecraft: Esc → Open to LAN."
-                }))
-            })
-            .children(worlds.into_iter().map(|w| {
-                let port = w.port;
-                let shared = services.iter().any(|s| s.effective_port == port);
-                row()
-                    .child(div().flex_1().min_w_0().truncate().child(w.motd.clone()))
-                    .child(muted(format!("port {port}")))
-                    .child(if shared {
-                        badge("Shared", GREEN).into_any_element()
-                    } else {
-                        button(eid("share-world", port), "Share", ACCENT)
-                            .on_click(cx.listener(move |this, _, _, _| this.share_world(w.clone())))
-                            .into_any_element()
-                    })
-            }));
+        let n = services.len();
 
-        col().gap_3().child(list).child(add).child(worlds_card)
+        col()
+            .child(pane_header(
+                &t,
+                "Hosting",
+                "Services on this computer that your peers can reach. Games, servers, anything that listens on a port.",
+            ))
+            .when(self.worlds.available && !worlds.is_empty(), |el| {
+                let nw = worlds.len();
+                el.child(glabel(&t, "Detected"))
+                    .child(group(&t).children(worlds.into_iter().enumerate().map(|(i, w)| {
+                        let port = w.port;
+                        let shared = services.iter().any(|s| s.effective_port == port);
+                        group_row(&t, i + 1 == nw)
+                            .child(tile("pick", t.green, 30., t.white))
+                            .child(title_sub(
+                                &t,
+                                w.motd.clone(),
+                                Some(format!("Minecraft · open to LAN on port {port}")),
+                            ))
+                            .child(if shared {
+                                pill("Shared", t.green).into_any_element()
+                            } else {
+                                button(&t, eid("share-world", port), None, "Share", ButtonKind::Primary)
+                                    .on_click(cx.listener(move |this, _, _, _| {
+                                        this.share_world(w.clone())
+                                    }))
+                                    .into_any_element()
+                            })
+                    })))
+            })
+            .child(
+                row()
+                    .child(glabel(&t, "Shared").flex_1())
+                    .child(
+                        button(&t, "add-svc", Some("plus"), "Add service", ButtonKind::Secondary)
+                            .mt_3()
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.open_sheet(Sheet::AddService, cx)
+                            })),
+                    ),
+            )
+            .child(
+                group(&t)
+                    .when(!self.services.available, |el| {
+                        el.child(empty(&t, "Live status not available"))
+                    })
+                    .when(services.is_empty(), |el| {
+                        el.child(empty(&t, "Nothing shared yet."))
+                    })
+                    .children(
+                        services
+                            .iter()
+                            .enumerate()
+                            .map(|(i, s)| self.render_service(&t, s, i + 1 == n, cx)),
+                    ),
+            )
+            .child(
+                small(
+                    &t,
+                    "Some games pick a new port every launch. If a shared service stops working, check that the port still matches.",
+                )
+                .mt_2p5()
+                .ml_0p5(),
+            )
     }
 
-    fn render_service(&mut self, s: &ServiceStatus, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_service(
+        &mut self,
+        t: &Theme,
+        s: &ServiceStatus,
+        last: bool,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
         let svc = s.service.clone();
         let name = svc.name.clone();
-        let (dot_color, status) = match (svc.enabled, s.reachable) {
-            (false, _) => (GREY, "Disabled".to_string()),
-            (true, Some(true)) => (GREEN, "Ready".to_string()),
-            (true, Some(false)) => (
-                DANGER,
-                format!("Nothing listening on port {}", s.effective_port),
-            ),
-            (true, None) => (GREY, String::new()),
+        let mut parts = vec![format!(
+            "{} {}",
+            proto_label(svc.protocol),
+            s.effective_port
+        )];
+        if s.effective_port != svc.port {
+            parts.push(format!("LAN world found, configured port {}", svc.port));
+        }
+        let (status_color, status) = match (svc.enabled, s.reachable) {
+            (false, _) => (t.fg2, Some("Paused".to_string())),
+            (true, Some(false)) => (t.red, Some("Nothing is listening on this port".into())),
+            _ => (t.fg2, None),
         };
-        let lan_note = (s.effective_port != svc.port)
-            .then(|| format!("LAN world detected on {}", s.effective_port));
-        let users = if s.connections > 0 {
+        if s.connections > 0 {
             let names: Vec<String> = s.peers.iter().map(|p| self.peer_name(*p)).collect();
-            Some(format!(
+            parts.push(format!(
                 "{} connection{} · {}",
                 s.connections,
                 if s.connections == 1 { "" } else { "s" },
                 names.join(", ")
-            ))
+            ));
+        } else if svc.enabled {
+            parts.push("nobody connected".into());
+        }
+        if let Some(st) = status {
+            parts.push(st);
+        }
+
+        let icon = if svc.minecraft_lan {
+            "pick"
         } else {
-            None
+            "broadcast"
         };
+        let tile_color = if !svc.enabled {
+            t.fg3
+        } else if svc.minecraft_lan {
+            t.green
+        } else {
+            t.purple
+        };
+        let toggle_name = name.clone();
+        let enabled = svc.enabled;
+        let menu_open = self.menu_is(&MenuKind::Service(name.clone()));
+        let menu_name = name.clone();
 
-        let toggle_enabled = {
-            let name = name.clone();
-            let enabled = !svc.enabled;
-            cx.listener(move |this, _, _, _| {
-                let name = name.clone();
-                this.run(move |n| async move { n.set_service_enabled(&name, enabled).await })
-            })
-        };
-        let toggle_mc = {
-            let mut svc = svc.clone();
-            svc.minecraft_lan = !svc.minecraft_lan;
-            cx.listener(move |this, _, _, _| {
-                let svc = svc.clone();
-                this.run(move |n| async move { n.add_service(svc).await })
-            })
-        };
-        let remove = {
-            let name = name.clone();
-            cx.listener(move |this, _, _, _| {
-                let name = name.clone();
-                this.run(move |n| async move { n.remove_service(&name).await })
-            })
-        };
-
-        col()
-            .gap_1()
-            .p_2()
-            .rounded_md()
-            .bg(rgb(BG))
+        group_row(t, last)
+            .child(tile(icon, tile_color, 30., t.white))
             .child(
-                row()
-                    .child(dot(dot_color))
-                    .child(div().flex_1().min_w_0().truncate().child(name.clone()))
-                    .child(muted(format!(
-                        "{} {}",
-                        proto(svc.protocol),
-                        s.effective_port
-                    ))),
+                title_sub(t, name.clone(), Some(parts.join(" · ")))
+                    .text_color(if status_color == t.red { t.red } else { t.fg }),
             )
-            .when(!status.is_empty(), |el| {
-                el.child(
-                    div()
-                        .text_xs()
-                        .text_color(rgb(if dot_color == DANGER { DANGER } else { MUTED }))
-                        .child(status),
-                )
+            .when(svc.enabled && s.reachable != Some(false), |el| {
+                el.child(pill("Sharing", t.green))
             })
-            .when_some(lan_note, |el, n| el.child(small(n)))
-            .when_some(users, |el, u| el.child(small(u)))
             .child(
-                row()
-                    .child(
-                        switch(eid("svc-on", &name), svc.enabled, "Enabled")
-                            .on_click(toggle_enabled),
-                    )
-                    .child(
-                        switch(eid("svc-mc", &name), svc.minecraft_lan, "Minecraft")
-                            .on_click(toggle_mc),
-                    )
-                    .child(div().flex_1())
-                    .child(button(eid("svc-rm", &name), "Remove", BORDER).on_click(remove)),
+                toggle(t, eid("svc-on", &name), enabled).on_click(cx.listener(
+                    move |this, _, _, _| {
+                        let n = toggle_name.clone();
+                        this.run(
+                            move |node| async move { node.set_service_enabled(&n, !enabled).await },
+                        )
+                    },
+                )),
+            )
+            .child(
+                icon_button(t, eid("svc-menu", &name), "dots")
+                    .when(menu_open, |el| el.bg(t.hover))
+                    .on_click(cx.listener(move |this, ev: &gpui::ClickEvent, _, cx| {
+                        let at = this.menu_at(ev.position());
+                        this.toggle_menu(MenuKind::Service(menu_name.clone()), at, cx);
+                    })),
             )
     }
 }

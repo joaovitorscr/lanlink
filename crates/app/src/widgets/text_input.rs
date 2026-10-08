@@ -5,12 +5,12 @@
 use std::ops::Range;
 
 use gpui::{
-    actions, div, prelude::*, px, rgb, AnyElement, App, ClipboardItem, Context, CursorStyle,
+    actions, div, prelude::*, px, AnyElement, App, ClipboardItem, Context, CursorStyle,
     EventEmitter, FocusHandle, Focusable, KeyBinding, KeyDownEvent, MouseButton, SharedString,
     Window,
 };
 
-use crate::theme::*;
+use crate::widgets::theme;
 
 actions!(
     text_input,
@@ -251,7 +251,8 @@ fn clean(s: &str) -> String {
 impl Render for TextInput {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let focused = self.focus.is_focused(window);
-        let caret = || div().flex_none().w(px(1.5)).h(px(16.)).bg(rgb(TEXT));
+        let t = theme(cx);
+        let caret = move || div().flex_none().w(px(1.5)).h(px(16.)).bg(t.fg);
         let span = |s: &str| div().flex_none().child(s.to_string());
 
         let mut parts: Vec<AnyElement> = Vec::new();
@@ -261,7 +262,7 @@ impl Render for TextInput {
             }
             parts.push(
                 div()
-                    .text_color(rgb(MUTED))
+                    .text_color(t.fg3)
                     .child(self.placeholder.clone())
                     .into_any_element(),
             );
@@ -277,7 +278,11 @@ impl Render for TextInput {
                 parts.push(span(&self.text[..r.start]).into_any_element());
                 parts.push(
                     span(&self.text[r.clone()])
-                        .bg(rgb(if focused { ACCENT } else { BORDER }))
+                        .bg(if focused {
+                            t.blue.opacity(0.35)
+                        } else {
+                            t.fg3.opacity(0.35)
+                        })
                         .into_any_element(),
                 );
                 parts.push(span(&self.text[r.end..]).into_any_element());
@@ -319,11 +324,11 @@ impl Render for TextInput {
             .items_center()
             .overflow_hidden()
             .whitespace_nowrap()
-            .rounded_md()
-            .bg(rgb(BG))
+            .rounded(px(6.))
+            .bg(t.field)
             .border_1()
-            .border_color(rgb(if focused { ACCENT } else { BORDER }))
-            .text_color(rgb(TEXT))
+            .border_color(if focused { t.blue } else { t.card_stroke })
+            .text_color(t.fg)
             .children(parts)
     }
 }

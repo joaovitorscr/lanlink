@@ -1,7 +1,9 @@
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 //! lanlink desktop app. Everything a user needs is in the GUI; no terminal required.
 
+mod assets;
 mod format;
+mod glass;
 mod state;
 mod theme;
 mod views;
@@ -9,9 +11,13 @@ mod widgets;
 
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
-use gpui::{prelude::*, px, size, App, Application, Bounds, WindowBounds, WindowOptions};
+use gpui::{
+    point, prelude::*, px, size, App, Application, Bounds, TitlebarOptions, WindowBounds,
+    WindowOptions,
+};
 
 use crate::state::Root;
+use crate::theme::{Prefs, Theme};
 
 fn init_logging() -> Option<lanlink_core::LogGuard> {
     match catch_unwind(AssertUnwindSafe(|| lanlink_core::init_logging("app"))) {
@@ -46,20 +52,38 @@ fn main() {
     // Keep the runtime alive on its own thread for the life of the process.
     std::thread::spawn(move || rt.block_on(std::future::pending::<()>()));
 
-    Application::new().run(move |cx: &mut App| {
-        widgets::text_input::bind_keys(cx);
-        let bounds = Bounds::centered(None, size(px(480.), px(720.)), cx);
-        cx.open_window(
-            WindowOptions {
-                window_bounds: Some(WindowBounds::Windowed(bounds)),
-                window_min_size: Some(size(px(420.), px(560.))),
-                is_resizable: true,
-                ..Default::default()
-            },
-            |_, cx| cx.new(|cx| Root::new(handle, cx)),
-        )
-        .expect("open window");
-        cx.on_window_closed(|cx| cx.quit()).detach();
-        cx.activate(true);
-    });
+    Application::new()
+        .with_assets(assets::Assets)
+        .run(move |cx: &mut App| {
+            widgets::text_input::bind_keys(cx);
+            let prefs = Prefs::load();
+            cx.set_global(Theme::new(true, prefs.transparency));
+            let bounds = Bounds::centered(None, size(px(820.), px(540.)), cx);
+            let titlebar = if cfg!(target_os = "macos") {
+                TitlebarOptions {
+                    title: Some("lanlink".into()),
+                    appears_transparent: true,
+                    traffic_light_position: Some(point(px(14.), px(16.))),
+                }
+            } else {
+                TitlebarOptions {
+                    title: Some("lanlink".into()),
+                    ..Default::default()
+                }
+            };
+            cx.open_window(
+                WindowOptions {
+                    window_bounds: Some(WindowBounds::Windowed(bounds)),
+                    window_min_size: Some(size(px(640.), px(420.))),
+                    is_resizable: true,
+                    titlebar: Some(titlebar),
+                    window_background: gpui::WindowBackgroundAppearance::Transparent,
+                    ..Default::default()
+                },
+                |_, cx| cx.new(|cx| Root::new(handle, cx)),
+            )
+            .expect("open window");
+            cx.on_window_closed(|cx| cx.quit()).detach();
+            cx.activate(true);
+        });
 }
