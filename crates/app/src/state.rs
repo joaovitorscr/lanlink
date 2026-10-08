@@ -1,15 +1,6 @@
-//! App state and all node interaction. A tokio runtime on a background thread owns the
-//! `Node`; results and `NodeEvent`s flow back to the `Root` view over an unbounded channel.
-//!
-//! Every async node call goes through [`Root::run`], which runs it in its own tokio task so
-//! a panic (e.g. a `todo!()` in core) becomes an error toast instead of a crash. The 1 s
-//! snapshot polling is wrapped in `catch_unwind`; a feature that panics once is marked
-//! unavailable and not polled again.
-
 use std::collections::HashMap;
 use std::future::Future;
 use std::net::{Ipv4Addr, TcpListener, UdpSocket};
-use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::time::{Duration, Instant};
 
 use gpui::{AppContext, Context, Entity, Pixels, Point, Subscription};
@@ -67,33 +58,6 @@ pub enum Tab {
     Settings,
 }
 
-/// A snapshot read every second. `available` turns false for good after the first panic.
-pub struct Polled<T> {
-    pub value: T,
-    pub available: bool,
-}
-
-impl<T: Default> Default for Polled<T> {
-    fn default() -> Self {
-        Self {
-            value: T::default(),
-            available: true,
-        }
-    }
-}
-
-impl<T> Polled<T> {
-    fn poll(&mut self, f: impl FnOnce() -> T) {
-        if !self.available {
-            return;
-        }
-        match catch_unwind(AssertUnwindSafe(f)) {
-            Ok(v) => self.value = v,
-            Err(_) => self.available = false,
-        }
-    }
-}
-
 pub struct Toast {
     pub text: String,
     pub error: bool,
@@ -125,14 +89,12 @@ pub struct Root {
     pub node: Option<Node>,
     pub fatal: Option<String>,
     pub config: Config,
-    pub peers: Polled<Vec<PeerInfo>>,
-    pub services: Polled<Vec<ServiceStatus>>,
-    pub tunnels: Polled<Vec<TunnelInfo>>,
-    /// Fallback when `tunnels_info()` is unavailable, kept current from events.
-    pub plain_tunnels: Vec<ActiveTunnel>,
-    pub worlds: Polled<Vec<LanWorld>>,
-    pub requests: Polled<Vec<PeerRequest>>,
-    pub network: Polled<NetworkStatus>,
+    pub peers: Vec<PeerInfo>,
+    pub services: Vec<ServiceStatus>,
+    pub tunnels: Vec<TunnelInfo>,
+    pub worlds: Vec<LanWorld>,
+    pub requests: Vec<PeerRequest>,
+    pub network: NetworkStatus,
     rates: HashMap<(NodeId, String), Rate>,
     pub tab: Tab,
     pub toast: Option<Toast>,
@@ -169,18 +131,16 @@ impl Root {
         })
         .detach();
 
-        // Start the node. A panic inside core surfaces as a JoinError.
         let start_tx = tx.clone();
         rt.spawn(async move {
-            let res = tokio::spawn(async {
+            let res = async {
                 let config = Config::load()?;
                 Node::start(config).await
-            })
+            }
             .await;
             let msg = match res {
-                Ok(Ok(node)) => Msg::Started(node),
-                Ok(Err(e)) => Msg::StartFailed(format!("{e:#}")),
-                Err(e) => Msg::StartFailed(panic_text(e)),
+                Ok(node) => Msg::Started(node),
+                Err(e) => Msg::StartFailed(format!("{e:#}")),
             };
             let _ = start_tx.send(msg);
         });
@@ -213,13 +173,12 @@ impl Root {
             node: None,
             fatal: None,
             config: Config::default(),
-            peers: Polled::default(),
-            services: Polled::default(),
-            tunnels: Polled::default(),
-            plain_tunnels: Vec::new(),
-            worlds: Polled::default(),
-            requests: Polled::default(),
-            network: Polled::default(),
+            peers: Vec::new(),
+            services: Vec::new(),
+            tunnels: Vec::new(),
+            worlds: Vec::new(),
+            requests: Vec::new(),
+            network: NetworkStatus::default(),
             rates: HashMap::new(),
             tab: Tab::Peers,
             toast: None,
@@ -242,24 +201,20 @@ impl Root {
             Msg::StartFailed(e) => self.fatal = Some(e),
             Msg::Event(ev) => match ev {
                 NodeEvent::PeerStateChanged(p) => {
-                    match self.peers.value.iter_mut().find(|x| x.id == p.id) {
+                    match self.peers.iter_mut().find(|x| x.id == p.id) {
                         Some(slot) => *slot = p,
-                        None => self.peers.value.push(p),
+                        None => self.peers.push(p),
                     }
                 }
-                NodeEvent::TunnelOpened(t) => {
-                    if !self.plain_tunnels.iter().any(|x| same_tunnel(x, &t)) {
-                        self.plain_tunnels.push(t);
-                    }
-                }
-                NodeEvent::TunnelClosed(t) => self.plain_tunnels.retain(|x| !same_tunnel(x, &t)),
+                // Tunnels are read by the 1 s poll.
+                NodeEvent::TunnelOpened(_) | NodeEvent::TunnelClosed(_) => {}
                 NodeEvent::Error(e) => self.show_error(e, cx),
                 NodeEvent::PeerRequest(r) => {
-                    self.requests.value.retain(|x| x.id != r.id);
-                    self.requests.value.insert(0, r);
+                    self.requests.retain(|x| x.id != r.id);
+                    self.requests.insert(0, r);
                 }
-                NodeEvent::NetworkChanged(n) => self.network.value = n,
-                NodeEvent::LanWorldsChanged(w) => self.worlds.value = w,
+                NodeEvent::NetworkChanged(n) => self.network = n,
+                NodeEvent::LanWorldsChanged(w) => self.worlds = w,
             },
             Msg::Resync => self.resync(),
             Msg::Error(e) => self.show_error(e, cx),
@@ -305,23 +260,20 @@ impl Root {
     fn resync(&mut self) {
         if let Some(node) = &self.node {
             self.config = node.config();
-            if let Ok(t) = catch_unwind(AssertUnwindSafe(|| node.tunnels())) {
-                self.plain_tunnels = t;
-            }
         }
     }
 
     /// Runs every second: fast-changing snapshots.
     fn poll(&mut self, cx: &mut Context<Self>) {
-        let Some(node) = self.node.clone() else {
+        let Some(node) = &self.node else {
             return;
         };
-        self.peers.poll(|| node.peers());
-        self.services.poll(|| node.services_status());
-        self.tunnels.poll(|| node.tunnels_info());
-        self.worlds.poll(|| node.lan_worlds());
-        self.requests.poll(|| node.pending_requests());
-        self.network.poll(|| node.network_status());
+        self.peers = node.peers();
+        self.services = node.services_status();
+        self.tunnels = node.tunnels_info();
+        self.worlds = node.lan_worlds();
+        self.requests = node.pending_requests();
+        self.network = node.network_status();
         self.update_rates();
         cx.notify();
     }
@@ -329,7 +281,7 @@ impl Root {
     fn update_rates(&mut self) {
         let now = Instant::now();
         let mut next = HashMap::new();
-        for t in &self.tunnels.value {
+        for t in &self.tunnels {
             let key = (t.tunnel.peer, t.tunnel.service.clone());
             let rate = match self.rates.remove(&key) {
                 Some(prev) => {
@@ -391,8 +343,8 @@ impl Root {
 
     // ---- running node calls ----
 
-    /// Run an async node operation on tokio. Ok sends `done(value)` (or a resync), Err and
-    /// panics become an error toast.
+    /// Run an async node operation on tokio. Ok sends `done(value)` (or a resync), Err
+    /// becomes an error toast.
     pub fn run_then<T, F, Fut>(&self, f: F, done: impl FnOnce(T) -> Msg + Send + 'static)
     where
         T: Send + 'static,
@@ -405,10 +357,9 @@ impl Root {
         };
         let tx = self.tx.clone();
         self.rt.spawn(async move {
-            let msg = match tokio::spawn(f(node)).await {
-                Ok(Ok(v)) => done(v),
-                Ok(Err(e)) => Msg::Error(format!("{e:#}")),
-                Err(e) => Msg::Error(panic_text(e)),
+            let msg = match f(node).await {
+                Ok(v) => done(v),
+                Err(e) => Msg::Error(format!("{e:#}")),
             };
             let _ = tx.send(msg);
             let _ = tx.send(Msg::Resync);
@@ -448,7 +399,7 @@ impl Root {
     }
 
     pub fn respond_request(&mut self, id: NodeId, allow: bool, cx: &mut Context<Self>) {
-        self.requests.value.retain(|r| r.id != id);
+        self.requests.retain(|r| r.id != id);
         self.run(move |n| async move { n.respond_request(id, allow, None).await });
         cx.notify();
     }
@@ -479,7 +430,7 @@ impl Root {
     /// Remove for real (the sheet asked for confirmation).
     pub fn remove_peer(&mut self, id: NodeId, cx: &mut Context<Self>) {
         self.sheet = None;
-        self.peers.value.retain(|p| p.id != id);
+        self.peers.retain(|p| p.id != id);
         self.run(move |n| async move { n.remove_peer(id).await });
         cx.notify();
     }
@@ -541,41 +492,9 @@ impl Root {
         );
     }
 
-    /// Tunnels with counters, or bare tunnels with zeros when `tunnels_info()` is unavailable.
-    pub fn tunnel_list(&self) -> Vec<TunnelInfo> {
-        if self.tunnels.available {
-            return self.tunnels.value.clone();
-        }
-        self.plain_tunnels
-            .iter()
-            .map(|t| TunnelInfo {
-                tunnel: t.clone(),
-                protocol: self.service_protocol(t.peer, &t.service),
-                connections: 0,
-                bytes_up: 0,
-                bytes_down: 0,
-                saved: self
-                    .config
-                    .saved_tunnels
-                    .iter()
-                    .any(|s| s.peer == t.peer.to_string() && s.service == t.service),
-            })
-            .collect()
-    }
-
-    fn service_protocol(&self, peer: NodeId, service: &str) -> Protocol {
-        self.peers
-            .value
-            .iter()
-            .find(|p| p.id == peer)
-            .and_then(|p| p.services.iter().find(|s| s.name == service))
-            .map_or(Protocol::Tcp, |s| s.protocol)
-    }
-
     pub fn peer_name(&self, id: NodeId) -> String {
         let key = id.to_string();
         self.peers
-            .value
             .iter()
             .find(|p| p.id == id)
             .and_then(|p| p.name.clone())
@@ -602,24 +521,6 @@ impl Root {
         self.sheet = None;
         self.run(move |n| async move { n.add_service(svc).await });
         cx.notify();
-    }
-
-    /// Hosted services with status, or config entries with unknown status as a fallback.
-    pub fn service_list(&self) -> Vec<ServiceStatus> {
-        if self.services.available {
-            return self.services.value.clone();
-        }
-        self.config
-            .services
-            .iter()
-            .map(|s| ServiceStatus {
-                service: s.clone(),
-                reachable: None,
-                effective_port: s.port,
-                connections: 0,
-                peers: Vec::new(),
-            })
-            .collect()
     }
 
     pub fn share_world(&mut self, world: LanWorld) {
@@ -707,20 +608,6 @@ pub fn panic_message(p: &(dyn std::any::Any + Send)) -> String {
         .cloned()
         .or_else(|| p.downcast_ref::<&str>().map(|s| s.to_string()))
         .unwrap_or_else(|| "unknown".into())
-}
-
-fn panic_text(e: tokio::task::JoinError) -> String {
-    match e.try_into_panic() {
-        Ok(p) => {
-            let m = panic_message(&*p);
-            if m.contains("not yet implemented") {
-                "Not available yet in this lanlink build".into()
-            } else {
-                format!("Internal error: {m}")
-            }
-        }
-        Err(e) => e.to_string(),
-    }
 }
 
 #[cfg(test)]

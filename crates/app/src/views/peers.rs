@@ -12,7 +12,7 @@ impl Root {
     pub fn render_peers(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let t = theme(cx);
         let id = self.node.as_ref().map(|n| n.id().to_string());
-        let peers = self.peers.value.clone();
+        let peers = self.peers.clone();
         let n = peers.len();
 
         col()
@@ -58,10 +58,7 @@ impl Root {
             .child(glabel(&t, "Peers"))
             .child(
                 group(&t)
-                    .when(!self.peers.available, |el| {
-                        el.child(empty(&t, "Peer list not available"))
-                    })
-                    .when(peers.is_empty() && self.peers.available, |el| {
+                    .when(peers.is_empty(), |el| {
                         el.child(empty(
                             &t,
                             "No peers yet. Use Add Peer, or send your ID to a friend.",
@@ -78,7 +75,6 @@ impl Root {
 
     fn render_requests(&mut self, t: &Theme, cx: &mut Context<Self>) -> Vec<impl IntoElement> {
         self.requests
-            .value
             .clone()
             .into_iter()
             .map(|r| {

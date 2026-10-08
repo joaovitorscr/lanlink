@@ -277,9 +277,10 @@ impl Root {
             }
             MenuKind::Service(name) => {
                 let svc = self
-                    .service_list()
-                    .into_iter()
-                    .find(|s| s.service.name == name);
+                    .services
+                    .iter()
+                    .find(|s| s.service.name == name)
+                    .cloned();
                 let svc = svc?;
                 let enabled = svc.service.enabled;
                 let mc = svc.service.minecraft_lan;

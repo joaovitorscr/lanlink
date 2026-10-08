@@ -12,8 +12,8 @@ use crate::widgets::*;
 impl Root {
     pub fn render_hosting(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let t = theme(cx);
-        let services = self.service_list();
-        let worlds = self.worlds.value.clone();
+        let services = self.services.clone();
+        let worlds = self.worlds.clone();
         let n = services.len();
 
         col()
@@ -22,7 +22,7 @@ impl Root {
                 "Hosting",
                 "Services on this computer that your peers can reach. Games, servers, anything that listens on a port.",
             ))
-            .when(self.worlds.available && !worlds.is_empty(), |el| {
+            .when(!worlds.is_empty(), |el| {
                 let nw = worlds.len();
                 el.child(glabel(&t, "Detected"))
                     .child(group(&t).children(worlds.into_iter().enumerate().map(|(i, w)| {
@@ -59,9 +59,6 @@ impl Root {
             )
             .child(
                 group(&t)
-                    .when(!self.services.available, |el| {
-                        el.child(empty(&t, "Live status not available"))
-                    })
                     .when(services.is_empty(), |el| {
                         el.child(empty(&t, "Nothing shared yet."))
                     })

@@ -13,7 +13,7 @@ use crate::widgets::*;
 impl Root {
     pub fn render_tunnels(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let t = theme(cx);
-        let peers = self.peers.value.clone();
+        let peers = self.peers.clone();
 
         let mut out = col().child(pane_header(
             &t,
@@ -70,9 +70,10 @@ impl Root {
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let open = self
-            .tunnel_list()
-            .into_iter()
-            .find(|x| x.tunnel.peer == peer && x.tunnel.service == svc.name);
+            .tunnels
+            .iter()
+            .find(|x| x.tunnel.peer == peer && x.tunnel.service == svc.name)
+            .cloned();
         let key = format!("{peer}-{}", svc.name);
         let icon = if svc.minecraft_lan {
             "pick"
@@ -148,8 +149,8 @@ impl Root {
                         icon_button(t, eid("close", &key), "x").on_click(cx.listener(
                             move |this, _, _, cx| {
                                 let tunnel = tunnel.clone();
-                                this.plain_tunnels
-                                    .retain(|x| !crate::state::same_tunnel(x, &tunnel));
+                                this.tunnels
+                                    .retain(|x| !crate::state::same_tunnel(&x.tunnel, &tunnel));
                                 this.run(move |n| async move { n.close_tunnel(&tunnel).await });
                                 cx.notify();
                             },

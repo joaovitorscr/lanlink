@@ -89,7 +89,7 @@ impl Root {
             .clone()
             .unwrap_or_else(|| "You".into());
         let my_id = self.node.as_ref().map(|n| n.id().to_string());
-        let online = self.node.is_some() && self.network.value.online;
+        let online = self.node.is_some() && self.network.online;
         let status = if self.node.is_none() {
             "Starting…"
         } else if online {
@@ -97,7 +97,7 @@ impl Root {
         } else {
             "Offline"
         };
-        let requests = self.requests.value.len();
+        let requests = self.requests.len();
 
         let tabs = [
             (Tab::Peers, "Peers", "users", t.blue),

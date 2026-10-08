@@ -9,8 +9,6 @@ mod theme;
 mod views;
 mod widgets;
 
-use std::panic::{catch_unwind, AssertUnwindSafe};
-
 use gpui::{
     point, prelude::*, px, size, App, Application, Bounds, TitlebarOptions, WindowBounds,
     WindowOptions,
@@ -19,22 +17,8 @@ use gpui::{
 use crate::state::Root;
 use crate::theme::{Prefs, Theme};
 
-fn init_logging() -> Option<lanlink_core::LogGuard> {
-    match catch_unwind(AssertUnwindSafe(|| lanlink_core::init_logging("app"))) {
-        Ok(guard) => Some(guard),
-        Err(_) => {
-            // Core logging not available yet: fall back to stderr.
-            let _ = tracing_subscriber::fmt()
-                .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
-                .try_init();
-            None
-        }
-    }
-}
-
 fn main() {
-    // Panics from core calls are caught and shown in the UI; log them instead of printing.
-    // Installed before logging so a todo!() in init_logging stays quiet too.
+    // Send panics to the log file instead of printing them.
     std::panic::set_hook(Box::new(|info| {
         tracing::warn!(
             "panic: {} at {}",
@@ -42,7 +26,7 @@ fn main() {
             info.location().map(|l| l.to_string()).unwrap_or_default()
         );
     }));
-    let _log_guard = init_logging();
+    let _log_guard = lanlink_core::init_logging("app");
 
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
