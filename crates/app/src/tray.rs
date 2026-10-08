@@ -88,18 +88,23 @@ impl Tray {
             let _ = menu_tx.send(action);
         }));
         TrayIconEvent::set_event_handler(Some(move |ev: TrayIconEvent| {
-            let show = match ev {
+            let left_up = matches!(
+                ev,
                 TrayIconEvent::Click {
                     button: MouseButton::Left,
                     button_state: MouseButtonState::Up,
                     ..
-                } => cfg!(not(target_os = "macos")),
+                }
+            );
+            let double = matches!(
+                ev,
                 TrayIconEvent::DoubleClick {
                     button: MouseButton::Left,
                     ..
-                } => true,
-                _ => false,
-            };
+                }
+            );
+            // On macOS a left click opens the menu, so only a double click shows the window.
+            let show = double || (left_up && !cfg!(target_os = "macos"));
             if show {
                 let _ = tx.send(TrayAction::Show);
             }
