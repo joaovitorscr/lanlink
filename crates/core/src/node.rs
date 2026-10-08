@@ -1,8 +1,8 @@
 use crate::api::{LanWorld, NetworkStatus, PeerRequest};
-use crate::forward::{self, Counters, UdpClient};
+use crate::forward::{self, ClientFlow, Counters, FlowSender, UDP_BUF};
 use crate::lan;
 use crate::protocol::{
-    decode_datagram, encode_datagram, read_msg, write_msg, ControlMsg, StreamHeader,
+    decode_datagram, read_msg, write_msg, ControlMsg, DatagramHeader, Reassembler, StreamHeader,
 };
 use crate::stats::{LatencyLog, LatencyStats, LatencyWindow};
 use crate::NodeId;
@@ -43,8 +43,11 @@ const PROBE_TIMEOUT: Duration = Duration::from_millis(500);
 const NETWORK_POLL_INTERVAL: Duration = Duration::from_secs(1);
 pub(crate) const LAN_WORLD_TTL: Duration = Duration::from_secs(5);
 const ANNOUNCE_INTERVAL: Duration = Duration::from_millis(1500);
-/// A UDP tunnel counts as one connection while it saw traffic this recently.
+/// A UDP flow (one local sender on the client, one local socket on the host) is closed after
+/// this long without traffic in either direction.
 const UDP_FLOW_IDLE: Duration = Duration::from_secs(30);
+/// How often idle UDP flows are looked for.
+const UDP_FLOW_SWEEP: Duration = Duration::from_secs(5);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ConnState {
@@ -108,8 +111,8 @@ pub(crate) struct PeerEntry {
     inbound: Vec<Connection>,
     /// Control stream senders of every live connection, keyed by connection stable id.
     controls: Vec<(usize, ControlSend)>,
-    /// Client UDP tunnels on the dialed connection, keyed by remote service index.
-    udp: HashMap<u16, (UdpClient, Arc<TunnelLive>)>,
+    /// Client UDP flows on the dialed connection, keyed by flow id.
+    udp: HashMap<u32, (Arc<ClientFlow>, Arc<TunnelLive>)>,
     /// Recent ping samples backing `info.stats`.
     latency: LatencyWindow,
     /// Name the peer sent in Hello. Used when we have no local name for it.
@@ -121,9 +124,8 @@ pub(crate) struct PeerEntry {
 pub(crate) struct TunnelLive {
     pub(crate) up: Arc<AtomicU64>,
     pub(crate) down: Arc<AtomicU64>,
+    /// Open TCP connections, or live UDP flows (local senders).
     pub(crate) conns: AtomicU32,
-    /// Milliseconds since node epoch of the last UDP packet (0 = never).
-    pub(crate) last_udp_ms: AtomicU64,
 }
 
 /// Total tunnel bytes per peer.
@@ -292,6 +294,30 @@ impl Drop for SvcGuard {
             }
             s.streams.remove(&self.id);
         }
+    }
+}
+
+/// Host side state of one client UDP flow. Dropping it closes the local socket.
+struct HostFlow {
+    sock: Arc<UdpSocket>,
+    /// Reads replies from the local service.
+    task: AbortHandle,
+    /// Milliseconds since node start of the last packet in either direction.
+    last_ms: Arc<AtomicU64>,
+    /// Counts the flow as a live connection of the service.
+    _guard: Option<SvcGuard>,
+}
+
+impl HostFlow {
+    fn idle(&self, now_ms: u64) -> bool {
+        now_ms.saturating_sub(self.last_ms.load(Ordering::Relaxed))
+            >= UDP_FLOW_IDLE.as_millis() as u64
+    }
+}
+
+impl Drop for HostFlow {
+    fn drop(&mut self) {
+        self.task.abort();
     }
 }
 
@@ -761,7 +787,7 @@ impl Node {
         // Unregister UDP tunnel endpoint if any.
         if let Some(e) = self.inner.peers.lock().unwrap().get_mut(&entry.tunnel.peer) {
             e.udp
-                .retain(|_, (c, _)| c.socket.local_addr().ok() != Some(entry.tunnel.local_addr));
+                .retain(|_, (f, _)| f.socket.local_addr().ok() != Some(entry.tunnel.local_addr));
         }
         tracing::info!(peer = %entry.tunnel.peer, service = %entry.tunnel.service, "tunnel closed");
         self.emit(NodeEvent::TunnelClosed(entry.tunnel));
@@ -815,14 +841,10 @@ impl Node {
                 Protocol::Udp => {
                     let socket = Arc::new(UdpSocket::bind(local).await?);
                     let local_addr = socket.local_addr()?;
-                    let client = UdpClient {
-                        socket,
-                        last_sender: Arc::new(Mutex::new(None)),
-                    };
                     let n = self.clone();
                     let live = live.clone();
                     let task = tokio::spawn(async move {
-                        n.udp_tunnel_loop(client, peer, svc.name, live).await
+                        n.udp_tunnel_loop(socket, peer, svc.name, live).await
                     });
                     (local_addr, task.abort_handle())
                 }
@@ -1294,24 +1316,29 @@ impl Node {
             let conn = conn.clone();
             set.spawn(async move {
                 let bytes = n.peer_bytes(peer);
+                let mut reassembler = Reassembler::default();
                 while let Ok(d) = conn.read_datagram().await {
-                    let Some((idx, payload)) = decode_datagram(&d) else {
+                    let Some((h, payload)) = decode_datagram(&d) else {
                         continue;
                     };
-                    let client = n
+                    let flow = n
                         .inner
                         .peers
                         .lock()
                         .unwrap()
                         .get(&peer)
-                        .and_then(|e| e.udp.get(&idx).cloned());
-                    if let Some((c, live)) = client {
-                        let len = payload.len() as u64;
-                        live.down.fetch_add(len, Ordering::Relaxed);
-                        live.last_udp_ms.store(n.now_ms().max(1), Ordering::Relaxed);
-                        bytes.received.fetch_add(len, Ordering::Relaxed);
-                        c.deliver(payload).await;
-                    }
+                        .and_then(|e| e.udp.get(&h.flow).cloned());
+                    let Some((flow, live)) = flow else {
+                        continue;
+                    };
+                    let Some(payload) = reassembler.accept(&h, payload) else {
+                        continue;
+                    };
+                    let len = payload.len() as u64;
+                    live.down.fetch_add(len, Ordering::Relaxed);
+                    flow.last_ms.store(n.now_ms(), Ordering::Relaxed);
+                    bytes.received.fetch_add(len, Ordering::Relaxed);
+                    flow.deliver(&payload).await;
                 }
             });
         } else {
@@ -1435,44 +1462,55 @@ impl Node {
         Ok(())
     }
 
-    /// Host side: relay datagrams to local UDP services, one local socket per service.
+    /// Host side: relay datagrams to local UDP services, one local socket per
+    /// (service, flow), so the service sees each of the client's local senders separately.
     async fn host_datagrams(&self, conn: Connection) {
         let peer = conn.remote_id();
         let bytes = self.peer_bytes(peer);
         let mut gen = self.inner.svc_gen.load(Ordering::Relaxed);
-        // index -> (socket, reader task, live count guard)
-        let mut sockets: HashMap<u16, (Arc<UdpSocket>, AbortHandle, SvcGuard)> = HashMap::new();
-        let clear = |sockets: &mut HashMap<u16, (Arc<UdpSocket>, AbortHandle, SvcGuard)>| {
-            for (_, (_, task, _)) in sockets.drain() {
-                task.abort();
-            }
-        };
-        while let Ok(d) = conn.read_datagram().await {
-            let Some((idx, payload)) = decode_datagram(&d) else {
+        let mut flows: HashMap<(u16, u32), HostFlow> = HashMap::new();
+        let mut reassembler = Reassembler::default();
+        let mut sweep = tokio::time::interval(UDP_FLOW_SWEEP);
+        loop {
+            let d = tokio::select! {
+                _ = sweep.tick() => {
+                    let now = self.now_ms();
+                    flows.retain(|_, f| !f.task.is_finished() && !f.idle(now));
+                    continue;
+                }
+                d = conn.read_datagram() => match d {
+                    Ok(d) => d,
+                    Err(_) => break,
+                },
+            };
+            let Some((h, payload)) = decode_datagram(&d) else {
                 continue;
             };
             let g = self.inner.svc_gen.load(Ordering::Relaxed);
             if g != gen {
                 // Service list changed: indexes may now point elsewhere.
                 gen = g;
-                clear(&mut sockets);
+                flows.clear();
             }
-            if sockets.get(&idx).is_some_and(|(_, t, _)| t.is_finished()) {
-                sockets.remove(&idx);
+            let Some(payload) = reassembler.accept(&h, payload) else {
+                continue;
+            };
+            let key = (h.service, h.flow);
+            if flows.get(&key).is_some_and(|f| f.task.is_finished()) {
+                flows.remove(&key);
             }
-            let sock = match sockets.get(&idx) {
-                Some((s, _, _)) => s.clone(),
+            let flow = match flows.get(&key) {
+                Some(f) => f,
                 None => {
-                    let svc = self.advertised_services().get(idx as usize).cloned();
+                    let svc = self.advertised_services().get(h.service as usize).cloned();
                     let Some(svc) = svc.filter(|s| s.protocol == Protocol::Udp) else {
-                        tracing::debug!(%peer, idx, "datagram for unknown udp service");
+                        tracing::debug!(%peer, idx = h.service, "datagram for unknown udp service");
                         continue;
                     };
-                    match self.host_udp_socket(conn.clone(), idx, svc.port).await {
-                        Ok((s, task)) => {
-                            let guard = self.svc_open(&svc.name, peer, Some(task.clone()));
-                            sockets.insert(idx, (s.clone(), task, guard));
-                            s
+                    match self.host_udp_flow(conn.clone(), h, svc.port).await {
+                        Ok(mut f) => {
+                            f._guard = Some(self.svc_open(&svc.name, peer, Some(f.task.clone())));
+                            flows.entry(key).or_insert(f)
                         }
                         Err(e) => {
                             tracing::warn!("udp socket for {}: {e:#}", svc.name);
@@ -1481,40 +1519,43 @@ impl Node {
                     }
                 }
             };
+            flow.last_ms.store(self.now_ms(), Ordering::Relaxed);
             bytes
                 .received
                 .fetch_add(payload.len() as u64, Ordering::Relaxed);
-            if let Err(e) = sock.send(payload).await {
+            if let Err(e) = flow.sock.send(&payload).await {
                 tracing::debug!("udp send to local service: {e}");
             }
         }
-        clear(&mut sockets);
     }
 
-    /// A UDP socket "connected" to the local service, relaying replies back as datagrams.
-    async fn host_udp_socket(
+    /// A UDP socket "connected" to the local service for one client flow, relaying replies
+    /// back as datagrams tagged with the flow.
+    async fn host_udp_flow(
         &self,
         conn: Connection,
-        index: u16,
+        h: DatagramHeader,
         port: u16,
-    ) -> anyhow::Result<(Arc<UdpSocket>, AbortHandle)> {
+    ) -> anyhow::Result<HostFlow> {
         let sock = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).await?;
         sock.connect((Ipv4Addr::LOCALHOST, port)).await?;
         let sock = Arc::new(sock);
         let reader = sock.clone();
         let sent = self.peer_bytes(conn.remote_id()).sent.clone();
+        let last_ms = Arc::new(AtomicU64::new(self.now_ms()));
+        let last = last_ms.clone();
+        let n = self.clone();
         let task = tokio::spawn(async move {
-            let mut buf = vec![0u8; 64 * 1024];
+            let sender = FlowSender::default();
+            let mut buf = vec![0u8; UDP_BUF];
             loop {
                 match reader.recv(&mut buf).await {
-                    Ok(n) => {
-                        sent.fetch_add(n as u64, Ordering::Relaxed);
-                        if let Err(e) = conn.send_datagram(encode_datagram(index, &buf[..n]).into())
-                        {
-                            tracing::debug!("udp send_datagram: {e}");
-                            if conn.close_reason().is_some() {
-                                break;
-                            }
+                    Ok(len) => {
+                        sent.fetch_add(len as u64, Ordering::Relaxed);
+                        last.store(n.now_ms(), Ordering::Relaxed);
+                        sender.send(&conn, h.service, h.flow, &buf[..len]);
+                        if conn.close_reason().is_some() {
+                            break;
                         }
                     }
                     Err(e) => {
@@ -1524,7 +1565,12 @@ impl Node {
                 }
             }
         });
-        Ok((sock, task.abort_handle()))
+        Ok(HostFlow {
+            sock,
+            task: task.abort_handle(),
+            last_ms,
+            _guard: None,
+        })
     }
 
     async fn tcp_tunnel_loop(
@@ -1570,22 +1616,44 @@ impl Node {
 
     async fn udp_tunnel_loop(
         self,
-        client: UdpClient,
+        socket: Arc<UdpSocket>,
         peer: NodeId,
         service: String,
         live: Arc<TunnelLive>,
     ) {
-        let mut buf = vec![0u8; 64 * 1024];
+        let mut buf = vec![0u8; UDP_BUF];
         let bytes = self.peer_bytes(peer);
+        // One flow per local sender, so replies reach the program that asked.
+        let mut flows: HashMap<SocketAddr, Arc<ClientFlow>> = HashMap::new();
+        let mut sweep = tokio::time::interval(UDP_FLOW_SWEEP);
         loop {
-            let (len, from) = match client.socket.recv_from(&mut buf).await {
-                Ok(x) => x,
-                Err(e) => {
-                    tracing::debug!("udp tunnel recv: {e}");
+            let (len, from) = tokio::select! {
+                _ = sweep.tick() => {
+                    self.expire_udp_flows(peer, &mut flows, &live);
                     continue;
                 }
+                res = socket.recv_from(&mut buf) => match res {
+                    Ok(x) => x,
+                    Err(e) => {
+                        tracing::debug!("udp tunnel recv: {e}");
+                        continue;
+                    }
+                },
             };
-            *client.last_sender.lock().unwrap() = Some(from);
+            let flow = flows
+                .entry(from)
+                .or_insert_with(|| {
+                    Arc::new(ClientFlow {
+                        id: self.inner.next_id.fetch_add(1, Ordering::Relaxed) as u32,
+                        local: from,
+                        socket: socket.clone(),
+                        sender: FlowSender::default(),
+                        last_ms: AtomicU64::new(0),
+                    })
+                })
+                .clone();
+            flow.last_ms.store(self.now_ms(), Ordering::Relaxed);
+            live.conns.store(flows.len() as u32, Ordering::Relaxed);
             let (conn, info) = match self.ensure_conn(peer).await {
                 Ok(x) => x,
                 Err(_) => continue,
@@ -1599,38 +1667,49 @@ impl Node {
             else {
                 continue;
             };
+            // Registered per connection: a new dialed connection starts with none.
             if let Some(e) = self.inner.peers.lock().unwrap().get_mut(&peer) {
-                let registered = e
-                    .udp
-                    .get(&index)
-                    .is_some_and(|(c, _)| Arc::ptr_eq(&c.socket, &client.socket));
-                if !registered {
-                    e.udp
-                        .retain(|_, (c, _)| !Arc::ptr_eq(&c.socket, &client.socket));
-                    e.udp.insert(index, (client.clone(), live.clone()));
-                }
+                e.udp
+                    .entry(flow.id)
+                    .or_insert_with(|| (flow.clone(), live.clone()));
             }
             live.up.fetch_add(len as u64, Ordering::Relaxed);
-            live.last_udp_ms
-                .store(self.now_ms().max(1), Ordering::Relaxed);
             bytes.sent.fetch_add(len as u64, Ordering::Relaxed);
-            if let Err(e) = conn.send_datagram(encode_datagram(index, &buf[..len]).into()) {
-                tracing::debug!("udp send_datagram: {e}");
-            }
+            flow.sender.send(&conn, index, flow.id, &buf[..len]);
         }
     }
 
-    /// Live connection count of a tunnel (UDP: 1 while traffic was seen recently).
-    pub(crate) fn tunnel_conns(&self, t: &TunnelEntry) -> u32 {
-        match t.protocol {
-            Protocol::Tcp => t.live.conns.load(Ordering::Relaxed),
-            Protocol::Udp => {
-                let last = t.live.last_udp_ms.load(Ordering::Relaxed);
-                let recent = last != 0
-                    && self.now_ms().saturating_sub(last) < UDP_FLOW_IDLE.as_millis() as u64;
-                u32::from(recent)
+    /// Forget client UDP flows that saw no traffic for [`UDP_FLOW_IDLE`].
+    fn expire_udp_flows(
+        &self,
+        peer: NodeId,
+        flows: &mut HashMap<SocketAddr, Arc<ClientFlow>>,
+        live: &TunnelLive,
+    ) {
+        let now = self.now_ms();
+        let idle = UDP_FLOW_IDLE.as_millis() as u64;
+        let before = flows.len();
+        let mut gone = Vec::new();
+        flows.retain(|_, f| {
+            let keep = now.saturating_sub(f.last_ms.load(Ordering::Relaxed)) < idle;
+            if !keep {
+                gone.push(f.id);
             }
+            keep
+        });
+        if flows.len() != before {
+            if let Some(e) = self.inner.peers.lock().unwrap().get_mut(&peer) {
+                for id in gone {
+                    e.udp.remove(&id);
+                }
+            }
+            live.conns.store(flows.len() as u32, Ordering::Relaxed);
         }
+    }
+
+    /// Live connection count of a tunnel (UDP: local senders seen recently).
+    pub(crate) fn tunnel_conns(&self, t: &TunnelEntry) -> u32 {
+        t.live.conns.load(Ordering::Relaxed)
     }
 
     // ---- background loops ----
