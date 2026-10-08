@@ -4,14 +4,18 @@ name: release
 #
 # nightly  Scheduled daily. Publishes only when main has commits since the last
 #          nightly. Version <cargo version>-nightly.<YYYYMMDD>.<run>, a GitHub
-#          pre-release that is never marked "latest". Windows only, to save minutes.
-#          Can also be started by hand (Actions > release > Run workflow > nightly).
+#          pre-release that is never marked "latest". Windows installer + macOS
+#          (Apple Silicon) disk image. Can also be started by hand
+#          (Actions > release > Run workflow > nightly).
 #
 # stable   Either push a tag vX.Y.Z (must match the workspace version in Cargo.toml),
 #          or run this workflow by hand with channel=stable, which promotes the commit
 #          of the latest nightly so stable only ships a build nightly users already ran.
-#          Marked "latest", so /releases/latest always points at stable. Windows + macOS
-#          (Apple Silicon and Intel).
+#          Marked "latest", so /releases/latest always points at stable. Windows installer
+#          + macOS disk images (Apple Silicon and Intel).
+#
+# Every release ships lanlink-<version>-windows-x64-setup.exe (installer),
+# lanlink-<version>-windows-x64.zip (portable) and lanlink-<version>-macos-<arch>.dmg.
 #
 # Old nightlies are pruned, keeping the newest 10.
 
@@ -152,15 +156,26 @@ jobs:
           Copy-Item "$out/lanlink-app.exe" dist/lanlink.exe
           Copy-Item "$out/lanlink.exe" dist/lanlink-cli.exe
           Compress-Archive -Path dist/lanlink.exe, dist/lanlink-cli.exe -DestinationPath "$name.zip"
+      # Inno Setup ships preinstalled on the windows-latest image.
+      - name: Installer
+        shell: pwsh
+        run: |
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          & $iscc "/DAppVersion=$env:LANLINK_VERSION" "/DSourceDir=$PWD\dist" "/DOutputDir=$PWD" `
+            "/DOutputBase=lanlink-$env:LANLINK_VERSION-windows-x64-setup" deploy\windows\lanlink.iss
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Get-Item lanlink-*-windows-x64-setup.exe
       - uses: actions/upload-artifact@v4
         with:
           name: windows
-          path: lanlink-*-windows-x64.zip
+          path: |
+            lanlink-*-windows-x64.zip
+            lanlink-*-windows-x64-setup.exe
           retention-days: 7
 
   macos:
     needs: resolve
-    if: needs.resolve.outputs.publish == 'true' && needs.resolve.outputs.channel == 'stable'
+    if: needs.resolve.outputs.publish == 'true'
     runs-on: macos-latest
     timeout-minutes: 90
     env:
@@ -185,29 +200,32 @@ jobs:
       # Intel is cross-compiled on the same arm64 runner, so it costs build time but no
       # extra runner start-up or cache. Stable releases only, so a few minutes per release.
       - name: Bundle (Intel)
+        if: needs.resolve.outputs.channel == 'stable'
         run: scripts/bundle-macos.sh --locked --target x86_64-apple-darwin --out "dist/lanlink-${LANLINK_VERSION}-macos-x64"
-      - name: Package
+      # One disk image per architecture: lanlink.app, an Applications shortcut to drag it
+      # onto, and the lanlink CLI. hdiutil keeps the bundle's signature intact.
+      - name: Disk images
         run: |
           set -euo pipefail
-          for arch in arm64 x64; do
-            name="lanlink-${LANLINK_VERSION}-macos-${arch}"
-            # ditto keeps the bundle's symlinks, permissions and signature intact; zip -r
-            # can break them. --keepParent puts everything in a lanlink-<version> folder.
-            ditto -c -k --keepParent "dist/$name" "$name.zip"
+          for dir in dist/lanlink-*-macos-*; do
+            name=$(basename "$dir")
+            staging=$(mktemp -d)
+            cp -R "$dir/lanlink.app" "$staging/"
+            cp "$dir/lanlink" "$staging/lanlink"
+            ln -s /Applications "$staging/Applications"
+            hdiutil create -volname "lanlink ${LANLINK_VERSION}" -srcfolder "$staging" -ov -format UDZO "$name.dmg"
+            hdiutil verify "$name.dmg"
           done
+          ls -l lanlink-*.dmg
       - uses: actions/upload-artifact@v4
         with:
           name: macos
-          path: lanlink-*-macos-*.zip
+          path: lanlink-*-macos-*.dmg
           retention-days: 7
 
   publish:
     needs: [resolve, windows, macos]
-    # macos is skipped for nightlies; only require that nothing failed.
-    if: |
-      always() && needs.resolve.outputs.publish == 'true' &&
-      needs.windows.result == 'success' &&
-      (needs.macos.result == 'success' || needs.macos.result == 'skipped')
+    if: needs.resolve.outputs.publish == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -236,7 +254,9 @@ jobs:
             {
               echo "Nightly build of \`$SHORT_SHA\`. It may be unstable; use the latest stable release if something breaks."
               echo
-              echo "Download \`lanlink-$VERSION-windows-x64.zip\`, unzip it and run \`lanlink.exe\`."
+              echo "Windows: run \`lanlink-$VERSION-windows-x64-setup.exe\` (or unzip the portable \`lanlink-$VERSION-windows-x64.zip\`)."
+              echo "macOS (Apple Silicon): open \`lanlink-$VERSION-macos-arm64.dmg\` and drag lanlink to Applications."
+              echo "Neither is code-signed: click *More info > Run anyway* on Windows; right-click > Open on macOS."
               echo
               if [ -n "$PREV_NIGHTLY" ]; then
                 echo "### Changes since $PREV_NIGHTLY"
@@ -252,8 +272,8 @@ jobs:
             {
               echo "Stable release $VERSION (\`$SHORT_SHA\`)."
               echo
-              echo "Windows: download \`lanlink-$VERSION-windows-x64.zip\`, unzip it and run \`lanlink.exe\`."
-              echo "macOS: \`lanlink-$VERSION-macos-arm64.zip\` (Apple Silicon) or \`lanlink-$VERSION-macos-x64.zip\` (Intel)."
+              echo "Windows: run \`lanlink-$VERSION-windows-x64-setup.exe\` (or unzip the portable \`lanlink-$VERSION-windows-x64.zip\`)."
+              echo "macOS: \`lanlink-$VERSION-macos-arm64.dmg\` (Apple Silicon) or \`lanlink-$VERSION-macos-x64.dmg\` (Intel); drag lanlink to Applications."
               echo "The app is not notarized: the first time, right-click \`lanlink.app\` and choose Open,"
               echo "or run \`xattr -dr com.apple.quarantine lanlink.app\`."
               echo
@@ -272,11 +292,11 @@ jobs:
         run: |
           set -euo pipefail
           if [ "$CHANNEL" = nightly ]; then
-            gh release create "$TAG" artifacts/*.zip --target "$REF" \
+            gh release create "$TAG" artifacts/* --target "$REF" \
               --title "lanlink Nightly $VERSION ($SHORT_SHA)" --notes-file notes.md \
               --prerelease --latest=false
           else
-            gh release create "$TAG" artifacts/*.zip --target "$REF" \
+            gh release create "$TAG" artifacts/* --target "$REF" \
               --title "lanlink $VERSION" --notes-file notes.md --latest
           fi
       - name: Prune old nightlies

@@ -6,9 +6,9 @@ Connections are end-to-end encrypted. Only people you've allowed can connect. Wh
 
 ## For the host (Windows)
 
-1. Go to the project's **GitHub Releases** page and download the `lanlink-<version>-windows-x64.zip` file from the release marked **Latest**. Releases marked **Pre-release** are nightly builds: newer, but less tested.
-2. Right-click the zip, choose **Extract All**, and open the extracted folder.
-3. Double-click `lanlink.exe`.
+1. Go to the project's **GitHub Releases** page and download `lanlink-<version>-windows-x64-setup.exe` from the release marked **Latest**. Releases marked **Pre-release** are nightly builds: newer, but less tested.
+2. Run the installer. It installs for your user only (no admin password) and puts lanlink in the Start menu. If you'd rather not install anything, the `lanlink-<version>-windows-x64.zip` next to it is a portable version: extract it and run `lanlink.exe`.
+3. Open lanlink.
    - If Windows shows "Windows protected your PC" (SmartScreen), click **More info**, then **Run anyway**. The app isn't code-signed, so Windows shows this warning.
    - If Windows Firewall asks whether to allow lanlink, click **Allow** (private networks are enough).
 4. In the **Peers** tab, copy your ID and send it to your friend (Discord, WhatsApp, anything).
@@ -20,11 +20,11 @@ Connections are end-to-end encrypted. Only people you've allowed can connect. Wh
 
 Keep lanlink running while you play. Closing the window doesn't quit it: lanlink stays in the notification area (the icons next to the clock; check the **^** overflow arrow), and your friend stays connected. Click the lanlink icon to bring the window back, or right-click it and choose **Quit lanlink** to stop. You can change this in Settings.
 
-`lanlink-cli.exe` in the same zip is a command-line version. You don't need it, and it can't run while the app is open: both use the same identity, so the second one stops with "lanlink is already running".
+`lanlink-cli.exe` next to it is a command-line version. You don't need it, and it can't run while the app is open: both use the same identity, so the second one stops with "lanlink is already running".
 
 ## For the player
 
-1. Get lanlink: the Windows zip described above, or the macOS zip (see [macOS](#macos) below).
+1. Get lanlink: the Windows installer described above, or the macOS disk image (see [macOS](#macos) below).
 2. Open lanlink. In the **Peers** tab, add your friend using the ID they sent you.
 3. Wait for your friend to click **Allow**. If the connection drops, click **Reconnect**.
 4. Open the **Tunnels** tab. It shows a local address such as `127.0.0.1:25565` for each game your friend shares.
@@ -34,8 +34,8 @@ The tunnel only works while lanlink is running. Closing the window keeps it runn
 
 ## macOS
 
-1. From the release marked **Latest** on GitHub Releases, download `lanlink-<version>-macos-arm64.zip` for Apple Silicon (M1 and newer) or `lanlink-<version>-macos-x64.zip` for Intel Macs.
-2. Double-click the zip. It unpacks into a folder with `lanlink.app` and `lanlink` (the command-line version, which you don't need). Drag `lanlink.app` to Applications if you like.
+1. From the release marked **Latest** on GitHub Releases, download `lanlink-<version>-macos-arm64.dmg` for Apple Silicon (M1 and newer) or `lanlink-<version>-macos-x64.dmg` for Intel Macs. Nightly builds only ship the Apple Silicon image.
+2. Open the disk image and drag `lanlink` onto the **Applications** shortcut. The `lanlink` file next to it is the command-line version, which you don't need.
 3. The first time, **right-click `lanlink.app` and choose Open**, then click **Open** in the dialog. The app isn't notarized by Apple, so a plain double-click only says it can't be checked for malware. On recent macOS versions, if there's no Open button, go to *System Settings → Privacy & Security* and click **Open Anyway**. Alternatively, clear the download quarantine in Terminal:
 
    ```sh

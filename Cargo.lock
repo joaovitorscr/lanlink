@@ -3858,7 +3858,7 @@ dependencies = [
 
 [[package]]
 name = "lanlink-app"
-version = "0.1.0"
+version = "0.0.2"
 dependencies = [
  "anyhow",
  "auto-launch",
@@ -3883,7 +3883,7 @@ dependencies = [
 
 [[package]]
 name = "lanlink-cli"
-version = "0.1.0"
+version = "0.0.2"
 dependencies = [
  "anyhow",
  "clap",
@@ -3894,7 +3894,7 @@ dependencies = [
 
 [[package]]
 name = "lanlink-core"
-version = "0.1.0"
+version = "0.0.2"
 dependencies = [
  "anyhow",
  "bytes",
@@ -3914,7 +3914,7 @@ dependencies = [
 
 [[package]]
 name = "lanlink-relay"
-version = "0.1.0"
+version = "0.0.2"
 dependencies = [
  "anyhow",
  "clap",
