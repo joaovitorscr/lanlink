@@ -15,7 +15,8 @@ name: release
 #          + macOS disk images (Apple Silicon and Intel).
 #
 # Every release ships lanlink-<version>-windows-x64-setup.exe (installer),
-# lanlink-<version>-windows-x64.zip (portable) and lanlink-<version>-macos-<arch>.dmg.
+# lanlink-<version>-windows-x64.zip (portable) and lanlink-<version>-macos-<arch>.dmg,
+# plus SHA256SUMS, which the app checks its update downloads against.
 #
 # Old nightlies are pruned, keeping the newest 10.
 
@@ -246,6 +247,16 @@ jobs:
         with:
           path: artifacts
           merge-multiple: true
+      # One "<sha256>  <file>" line per asset. The app refuses to install an update whose
+      # download doesn't match its line here.
+      - name: Checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd artifacts
+          sha256sum -- lanlink-* > ../SHA256SUMS
+          mv ../SHA256SUMS SHA256SUMS
+          cat SHA256SUMS
       - name: Write release notes
         shell: bash
         run: |
