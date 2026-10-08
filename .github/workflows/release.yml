@@ -1,0 +1,281 @@
+name: release
+
+# Two channels, modelled on pingdotgg/t3code:
+#
+# nightly  Scheduled daily. Publishes only when main has commits since the last
+#          nightly. Version <cargo version>-nightly.<YYYYMMDD>.<run>, a GitHub
+#          pre-release that is never marked "latest". Windows only, to save minutes.
+#          Can also be started by hand (Actions > release > Run workflow > nightly).
+#
+# stable   Either push a tag vX.Y.Z (must match the workspace version in Cargo.toml),
+#          or run this workflow by hand with channel=stable, which promotes the commit
+#          of the latest nightly so stable only ships a build nightly users already ran.
+#          Marked "latest", so /releases/latest always points at stable. Windows + macOS.
+#
+# Old nightlies are pruned, keeping the newest 10.
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+      - "!v*-nightly.*"
+  schedule:
+    # 05:17 UTC = 02:17 in Brazil. Avoid minute zero, when GitHub is busiest.
+    - cron: "17 5 * * *"
+  workflow_dispatch:
+    inputs:
+      channel:
+        description: Release channel
+        type: choice
+        options: [nightly, stable]
+        default: nightly
+      version:
+        description: Stable version (e.g. 0.2.0). Defaults to the version in Cargo.toml.
+        type: string
+        required: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ (github.event_name == 'schedule' || inputs.channel == 'nightly') && 'nightly' || 'stable' }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  NIGHTLIES_TO_KEEP: 10
+
+jobs:
+  resolve:
+    name: Resolve channel, version and commit
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      publish: ${{ steps.meta.outputs.publish }}
+      channel: ${{ steps.meta.outputs.channel }}
+      version: ${{ steps.meta.outputs.version }}
+      tag: ${{ steps.meta.outputs.tag }}
+      ref: ${{ steps.meta.outputs.ref }}
+      short_sha: ${{ steps.meta.outputs.short_sha }}
+      previous_nightly: ${{ steps.meta.outputs.previous_nightly }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: meta
+        name: Resolve release metadata
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT: ${{ github.event_name }}
+          INPUT_CHANNEL: ${{ inputs.channel }}
+          INPUT_VERSION: ${{ inputs.version }}
+          RUN_NUMBER: ${{ github.run_number }}
+        run: |
+          set -euo pipefail
+          cargo_version=$(sed -n '/^\[workspace.package\]/,/^\[/{s/^version *= *"\(.*\)"/\1/p}' Cargo.toml)
+          [ -n "$cargo_version" ] || { echo "::error::could not read workspace version"; exit 1; }
+
+          # Latest nightly release (tag + commit), if any.
+          prev_tag=$(gh release list --limit 100 --json tagName,isPrerelease \
+            -q '[.[] | select(.isPrerelease and (.tagName | test("-nightly\\.")))][0].tagName // ""')
+          prev_sha=""
+          if [ -n "$prev_tag" ]; then prev_sha=$(git rev-list -n1 "$prev_tag"); fi
+
+          if [ "$EVENT" = "push" ]; then
+            channel=stable
+            version="${GITHUB_REF_NAME#v}"
+            ref="$GITHUB_SHA"
+            if [ "$version" != "$cargo_version" ]; then
+              echo "::error::tag $GITHUB_REF_NAME does not match Cargo.toml version $cargo_version"; exit 1
+            fi
+          elif [ "$EVENT" = "workflow_dispatch" ] && [ "$INPUT_CHANNEL" = "stable" ]; then
+            channel=stable
+            version="${INPUT_VERSION:-$cargo_version}"
+            [ -n "$prev_sha" ] || { echo "::error::no nightly to promote; run a nightly first"; exit 1; }
+            ref="$prev_sha"
+            if git rev-parse -q --verify "refs/tags/v$version" >/dev/null; then
+              echo "::error::tag v$version already exists"; exit 1
+            fi
+            echo "::notice::Promoting $prev_tag ($prev_sha) to stable v$version"
+          else
+            channel=nightly
+            ref=$(git rev-parse origin/main)
+            version="${cargo_version}-nightly.$(date -u +%Y%m%d).${RUN_NUMBER}"
+          fi
+
+          publish=true
+          if [ "$EVENT" = "schedule" ] && [ "$ref" = "$prev_sha" ]; then
+            echo "::notice::main has no commits since $prev_tag, skipping nightly"
+            publish=false
+          fi
+
+          {
+            echo "publish=$publish"
+            echo "channel=$channel"
+            echo "version=$version"
+            echo "tag=v$version"
+            echo "ref=$ref"
+            echo "short_sha=$(git rev-parse --short=12 "$ref")"
+            echo "previous_nightly=$prev_tag"
+          } >> "$GITHUB_OUTPUT"
+          echo "channel=$channel version=$version ref=$ref publish=$publish"
+
+  windows:
+    needs: resolve
+    if: needs.resolve.outputs.publish == 'true'
+    runs-on: windows-latest
+    timeout-minutes: 90
+    env:
+      LANLINK_VERSION: ${{ needs.resolve.outputs.version }}
+      LANLINK_CHANNEL: ${{ needs.resolve.outputs.channel }}
+      LANLINK_COMMIT: ${{ needs.resolve.outputs.short_sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.resolve.outputs.ref }}
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: release
+      - name: Build
+        run: cargo build --release --target x86_64-pc-windows-msvc -p lanlink-app -p lanlink-cli
+      - name: Package
+        shell: pwsh
+        run: |
+          $name = "lanlink-$env:LANLINK_VERSION-windows-x64"
+          New-Item -ItemType Directory -Force dist | Out-Null
+          $out = "target/x86_64-pc-windows-msvc/release"
+          Copy-Item "$out/lanlink-app.exe" dist/lanlink.exe
+          Copy-Item "$out/lanlink.exe" dist/lanlink-cli.exe
+          Compress-Archive -Path dist/lanlink.exe, dist/lanlink-cli.exe -DestinationPath "$name.zip"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: lanlink-*-windows-x64.zip
+          retention-days: 7
+
+  macos:
+    needs: resolve
+    if: needs.resolve.outputs.publish == 'true' && needs.resolve.outputs.channel == 'stable'
+    runs-on: macos-latest
+    timeout-minutes: 45
+    env:
+      LANLINK_VERSION: ${{ needs.resolve.outputs.version }}
+      LANLINK_CHANNEL: ${{ needs.resolve.outputs.channel }}
+      LANLINK_COMMIT: ${{ needs.resolve.outputs.short_sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.resolve.outputs.ref }}
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: release
+      - name: Build
+        run: cargo build --release --target aarch64-apple-darwin -p lanlink-app -p lanlink-cli
+      - name: Package
+        run: |
+          name="lanlink-${LANLINK_VERSION}-macos-arm64"
+          mkdir -p dist
+          out=target/aarch64-apple-darwin/release
+          cp "$out/lanlink-app" dist/lanlink-app
+          cp "$out/lanlink" dist/lanlink
+          (cd dist && zip -9 "../$name.zip" lanlink-app lanlink)
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos
+          path: lanlink-*-macos-arm64.zip
+          retention-days: 7
+
+  publish:
+    needs: [resolve, windows, macos]
+    # macos is skipped for nightlies; only require that nothing failed.
+    if: |
+      always() && needs.resolve.outputs.publish == 'true' &&
+      needs.windows.result == 'success' &&
+      (needs.macos.result == 'success' || needs.macos.result == 'skipped')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      CHANNEL: ${{ needs.resolve.outputs.channel }}
+      VERSION: ${{ needs.resolve.outputs.version }}
+      TAG: ${{ needs.resolve.outputs.tag }}
+      REF: ${{ needs.resolve.outputs.ref }}
+      SHORT_SHA: ${{ needs.resolve.outputs.short_sha }}
+      PREV_NIGHTLY: ${{ needs.resolve.outputs.previous_nightly }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+      - name: Write release notes
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "$CHANNEL" = nightly ]; then
+            {
+              echo "Nightly build of \`$SHORT_SHA\`. It may be unstable; use the latest stable release if something breaks."
+              echo
+              echo "Download \`lanlink-$VERSION-windows-x64.zip\`, unzip it and run \`lanlink.exe\`."
+              echo
+              if [ -n "$PREV_NIGHTLY" ]; then
+                echo "### Changes since $PREV_NIGHTLY"
+                git log --no-merges --format='- %s (%h)' "$PREV_NIGHTLY..$REF"
+              else
+                echo "### Changes"
+                git log --no-merges --format='- %s (%h)' -20 "$REF"
+              fi
+            } > notes.md
+          else
+            prev_stable=$(gh release list --limit 100 --json tagName,isPrerelease \
+              -q '[.[] | select(.isPrerelease | not)][0].tagName // ""')
+            {
+              echo "Stable release $VERSION (\`$SHORT_SHA\`)."
+              echo
+              echo "Windows: download \`lanlink-$VERSION-windows-x64.zip\`, unzip it and run \`lanlink.exe\`."
+              echo "macOS (Apple Silicon): \`lanlink-$VERSION-macos-arm64.zip\`."
+              echo
+              if [ -n "$prev_stable" ]; then
+                echo "### Changes since $prev_stable"
+                git log --no-merges --format='- %s (%h)' "$prev_stable..$REF"
+              else
+                echo "### Changes"
+                git log --no-merges --format='- %s (%h)' -30 "$REF"
+              fi
+            } > notes.md
+          fi
+          cat notes.md
+      - name: Create release
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "$CHANNEL" = nightly ]; then
+            gh release create "$TAG" artifacts/*.zip --target "$REF" \
+              --title "lanlink Nightly $VERSION ($SHORT_SHA)" --notes-file notes.md \
+              --prerelease --latest=false
+          else
+            gh release create "$TAG" artifacts/*.zip --target "$REF" \
+              --title "lanlink $VERSION" --notes-file notes.md --latest
+          fi
+      - name: Prune old nightlies
+        if: env.CHANNEL == 'nightly'
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh release list --limit 200 --json tagName,isPrerelease,createdAt \
+            -q '[.[] | select(.isPrerelease and (.tagName | test("-nightly\\.")))] | sort_by(.createdAt) | reverse | .[env.NIGHTLIES_TO_KEEP | tonumber:] | .[].tagName' \
+          | while read -r tag; do
+              echo "deleting $tag"
+              gh release delete "$tag" --cleanup-tag --yes
+            done

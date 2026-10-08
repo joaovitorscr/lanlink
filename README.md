@@ -6,7 +6,7 @@ Connections are end-to-end encrypted. Only people you've allowed can connect. Wh
 
 ## For the host (Windows)
 
-1. Go to the project's **GitHub Releases** page and download `lanlink-windows-x64.zip` from the latest release.
+1. Go to the project's **GitHub Releases** page and download the `lanlink-<version>-windows-x64.zip` file from the release marked **Latest**. Releases marked **Pre-release** are nightly builds: newer, but less tested.
 2. Right-click the zip, choose **Extract All**, and open the extracted folder.
 3. Double-click `lanlink.exe`.
    - If Windows shows "Windows protected your PC" (SmartScreen), click **More info**, then **Run anyway**. The app isn't code-signed, so Windows shows this warning.
@@ -77,13 +77,20 @@ gpui uses the `runtime_shaders` feature, so macOS builds don't need the Metal to
 
 ### CI and releases
 
-`.github/workflows/build.yml` runs on pushes to `main`, on pull requests, and on `v*` tags:
+**CI** (`.github/workflows/build.yml`) runs on pushes to `main` and on pull requests. It checks formatting, runs the core tests, runs clippy on Linux, and runs clippy for the GUI and CLI on Windows. It does not produce downloads.
 
-- **windows-latest** builds the GUI and CLI and uploads `lanlink-windows-x64.zip` (`lanlink.exe` + `lanlink-cli.exe`).
-- **macos-latest** builds both for Apple Silicon and uploads `lanlink-macos-arm64.zip`.
-- **ubuntu-latest** runs core tests and clippy, and builds the relay.
+**Releases** (`.github/workflows/release.yml`) have two channels:
 
-To publish a release, push a tag such as `git tag v0.1.0 && git push origin v0.1.0`. The workflow attaches both zips to a GitHub Release.
+| Channel | How it's published | Version | Platforms |
+|---|---|---|---|
+| Nightly | Daily at 05:17 UTC, only if `main` has new commits. Or by hand: Actions, release, Run workflow, channel nightly. | `0.1.0-nightly.20261008.12` | Windows |
+| Stable | Push a tag matching the Cargo version, e.g. `git tag v0.2.0 && git push origin v0.2.0`. Or by hand with channel stable, which promotes the latest nightly's commit. | `0.2.0` | Windows, macOS |
+
+Nightlies are GitHub pre-releases and never marked Latest, so `releases/latest` always points at stable. Only the newest 10 nightlies are kept. The app shows its version and channel at the bottom of Settings, and `lanlink-cli --version` prints the version.
+
+To cut a stable release, bump `version` under `[workspace.package]` in `Cargo.toml`, merge it, wait for a nightly to include it, then run the workflow with channel stable.
+
+The repo is private, so Actions minutes count against the account's quota, with Windows billed at 2x and macOS at 10x. That is why nightlies are Windows only and CI skips macOS.
 
 ### Relay
 

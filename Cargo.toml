@@ -20,6 +20,6 @@ clap = { version = "4", features = ["derive"] }
 dirs = "6"
 
 [profile.release]
-lto = true
-codegen-units = 1
+# Thin LTO: nearly the same size and speed as fat LTO, much faster CI release builds.
+lto = "thin"
 strip = true

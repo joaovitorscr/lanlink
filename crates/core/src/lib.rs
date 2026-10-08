@@ -12,6 +12,7 @@
 //! - Latency: TCP_NODELAY on local sockets, small buffers, no extra framing on TCP streams.
 
 pub mod api;
+pub mod build_info;
 pub mod config;
 pub mod forward;
 pub mod lan;

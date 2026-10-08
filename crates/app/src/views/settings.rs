@@ -70,6 +70,9 @@ impl Root {
             .child(relay)
             .child(lan)
             .child(folders)
-            .child(small(format!("lanlink {}", env!("CARGO_PKG_VERSION"))))
+            .child(small(format!(
+                "lanlink {}",
+                lanlink_core::build_info::describe()
+            )))
     }
 }

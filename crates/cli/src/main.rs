@@ -7,7 +7,7 @@ use tokio::sync::broadcast::error::RecvError;
 #[derive(Parser)]
 #[command(
     name = "lanlink",
-    version,
+    version = lanlink_core::build_info::VERSION,
     about = "Peer-to-peer port forwarding over iroh"
 )]
 struct Cli {
