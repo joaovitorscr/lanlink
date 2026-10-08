@@ -1,7 +1,10 @@
 use anyhow::Context;
 use clap::{Parser, Subcommand};
+use lanlink_core::export::{self, ImportMode};
+use lanlink_core::instance::InstanceLock;
 use lanlink_core::{Config, ConnState, Node, NodeEvent, NodeId, PeerInfo, Protocol, Service};
 use std::net::{IpAddr, SocketAddr};
+use std::path::PathBuf;
 use std::time::Duration;
 use tokio::sync::broadcast::error::RecvError;
 
@@ -67,6 +70,28 @@ enum Cmd {
     Remove { node_id: NodeId },
     /// Set the local display name of a peer.
     Rename { node_id: NodeId, name: String },
+    /// Export or import the configuration (peers, services, saved tunnels, settings).
+    Config {
+        #[command(subcommand)]
+        cmd: ConfigCmd,
+    },
+}
+
+#[derive(Subcommand)]
+enum ConfigCmd {
+    /// Write the configuration to a file, or to stdout. The identity key is not included.
+    Export { path: Option<PathBuf> },
+    /// Import a file written by `config export` or the app. lanlink must not be running.
+    /// The current config is backed up to config.json.bak first.
+    Import {
+        path: PathBuf,
+        /// The file replaces the current configuration.
+        #[arg(long, conflicts_with = "merge")]
+        replace: bool,
+        /// Add the file's peers, services and tunnels to the current ones (default).
+        #[arg(long)]
+        merge: bool,
+    },
 }
 
 #[tokio::main]
@@ -121,6 +146,44 @@ async fn main() -> anyhow::Result<()> {
             config.peer_names.insert(id.clone(), name.clone());
             config.save()?;
             println!("{id} is now {name}");
+        }
+        Cmd::Config {
+            cmd: ConfigCmd::Export { path },
+        } => {
+            let text = export::export(&config);
+            match path {
+                Some(path) => {
+                    std::fs::write(&path, text + "\n")
+                        .with_context(|| format!("writing {}", path.display()))?;
+                    println!("exported to {} (identity key not included)", path.display());
+                }
+                None => println!("{text}"),
+            }
+        }
+        Cmd::Config {
+            cmd: ConfigCmd::Import { path, replace, .. },
+        } => {
+            // Hold the instance lock so a running app cannot overwrite the result.
+            let _lock = InstanceLock::acquire(&Config::dir())
+                .context("can't import while lanlink is running; quit it, or use Settings > Import config in the app")?;
+            let bytes =
+                std::fs::read(&path).with_context(|| format!("reading {}", path.display()))?;
+            let import = export::parse(&bytes)?;
+            let mode = if replace {
+                ImportMode::Replace
+            } else {
+                ImportMode::Merge
+            };
+            let current = Config::load()?;
+            let backup = current.save_backup()?;
+            import.resolve(&current, mode).save()?;
+            println!(
+                "imported {} ({}) by {}",
+                path.display(),
+                import.summary().describe(),
+                if replace { "replacing" } else { "merging" }
+            );
+            println!("previous config saved to {}", backup.display());
         }
         Cmd::Requests { secs } => {
             let node = Node::start(config).await?;
