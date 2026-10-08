@@ -84,7 +84,6 @@ impl Root {
         }
         let n = self
             .peers
-            .value
             .iter()
             .filter(|p| matches!(p.state, ConnState::Direct | ConnState::Relayed))
             .count();
