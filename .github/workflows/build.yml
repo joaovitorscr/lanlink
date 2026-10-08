@@ -3,6 +3,7 @@ name: ci
 # Fast checks on every push and PR. Release builds live in release.yml.
 # Private repo minutes are billed with multipliers (Windows x2, macOS x10),
 # so CI only type-checks Windows and skips macOS (development happens on a Mac).
+# Cargo commands use --locked so a stale Cargo.lock fails CI instead of being rewritten.
 
 on:
   push:
@@ -32,11 +33,21 @@ jobs:
       - name: Format
         run: cargo fmt --all --check
       - name: Test core
-        run: cargo test -p lanlink-core
+        run: cargo test --locked -p lanlink-core
       - name: Clippy
-        run: cargo clippy --workspace --exclude lanlink-app --all-targets -- -D warnings
+        run: cargo clippy --locked --workspace --exclude lanlink-app --all-targets -- -D warnings
       - name: Build relay
-        run: cargo build -p lanlink-relay
+        run: cargo build --locked -p lanlink-relay
+
+  # Known vulnerabilities in dependencies (RustSec). Needs no secrets; see deny.toml.
+  advisories:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check advisories
 
   windows-check:
     runs-on: windows-latest
@@ -48,4 +59,6 @@ jobs:
           components: clippy
       - uses: Swatinem/rust-cache@v2
       - name: Clippy (app and CLI on Windows)
-        run: cargo clippy -p lanlink-app -p lanlink-cli --all-targets -- -D warnings
+        run: cargo clippy --locked -p lanlink-app -p lanlink-cli --all-targets -- -D warnings
+      - name: Test core
+        run: cargo test --locked -p lanlink-core

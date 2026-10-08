@@ -37,6 +37,17 @@ pub fn parse_port(s: &str) -> Option<u16> {
     s.trim().parse::<u16>().ok().filter(|p| *p > 0)
 }
 
+/// Time since an event: "just now", "5 min ago", "3 h ago", "2 d ago".
+pub fn ago(d: std::time::Duration) -> String {
+    let mins = d.as_secs() / 60;
+    match mins {
+        0 => "just now".into(),
+        1..=59 => format!("{mins} min ago"),
+        60..=1439 => format!("{} h ago", mins / 60),
+        _ => format!("{} d ago", mins / 1440),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -63,5 +74,14 @@ mod tests {
         assert_eq!(parse_port("0"), None);
         assert_eq!(parse_port("70000"), None);
         assert_eq!(parse_port("abc"), None);
+    }
+
+    #[test]
+    fn ages() {
+        use std::time::Duration;
+        assert_eq!(ago(Duration::from_secs(30)), "just now");
+        assert_eq!(ago(Duration::from_secs(5 * 60)), "5 min ago");
+        assert_eq!(ago(Duration::from_secs(3 * 3600 + 10)), "3 h ago");
+        assert_eq!(ago(Duration::from_secs(50 * 3600)), "2 d ago");
     }
 }

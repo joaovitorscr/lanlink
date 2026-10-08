@@ -3,7 +3,9 @@
 use gpui::{div, prelude::*, px, ClipboardItem, Context};
 use lanlink_core::Config;
 
+use crate::format;
 use crate::state::{MenuKind, Root};
+use crate::update;
 use crate::views::peers::pane_header;
 use crate::widgets::*;
 
@@ -120,6 +122,8 @@ impl Root {
                     ),
             );
 
+        let updates = self.render_updates(cx);
+
         let files = group(&t)
             .child(
                 group_row(&t, false)
@@ -160,7 +164,70 @@ impl Root {
             .child(network)
             .child(glabel(&t, "Appearance"))
             .child(appearance)
+            .child(glabel(&t, "Updates"))
+            .child(updates)
             .child(glabel(&t, "Files"))
             .child(files)
+    }
+
+    fn render_updates(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
+        let t = theme(cx);
+        if !update::supported() {
+            return group(&t).child(group_row(&t, true).child(title_sub(
+                &t,
+                "Updates",
+                Some("Development build: update checks are off"),
+            )));
+        }
+
+        let u = &self.update;
+        let status = if u.checking {
+            "Checking for updates…".to_string()
+        } else if let Some(r) = &u.available {
+            format!("lanlink {} is available", r.version)
+        } else if u.failed {
+            "Couldn't check for updates".to_string()
+        } else if u.last_check.is_some() {
+            "You're up to date".to_string()
+        } else {
+            "Not checked yet".to_string()
+        };
+        let last = u
+            .last_check
+            .map(|at| format!("Last checked {}", format::ago(at.elapsed())));
+        let download = u.available.as_ref().map(|r| r.url.clone());
+
+        group(&t)
+            .child(
+                group_row(&t, false)
+                    .child(title_sub(
+                        &t,
+                        "Check for updates",
+                        Some(format!(
+                            "Looks for new {} releases on GitHub every 6 hours",
+                            lanlink_core::build_info::CHANNEL
+                        )),
+                    ))
+                    .child(
+                        toggle(&t, "check-updates", self.prefs.check_updates)
+                            .on_click(cx.listener(|this, _, _, cx| this.toggle_update_checks(cx))),
+                    ),
+            )
+            .child(
+                group_row(&t, true)
+                    .child(title_sub(&t, status, last))
+                    .when_some(download, |el, url| {
+                        el.child(
+                            button(&t, "update-open", None, "Download", ButtonKind::Primary)
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    this.open_url(url.clone(), cx)
+                                })),
+                        )
+                    })
+                    .child(
+                        button(&t, "check-now", None, "Check now", ButtonKind::Secondary)
+                            .on_click(cx.listener(|this, _, _, cx| this.check_for_updates(cx))),
+                    ),
+            )
     }
 }

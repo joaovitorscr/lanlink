@@ -36,6 +36,12 @@ pub struct Prefs {
     /// Translucent window with blur / glass behind it. Off = opaque.
     #[serde(default = "default_true")]
     pub transparency: bool,
+    /// Check GitHub for a newer release at startup and every few hours.
+    #[serde(default = "default_true")]
+    pub check_updates: bool,
+    /// Version whose update banner the user dismissed.
+    #[serde(default)]
+    pub dismissed_update: Option<String>,
 }
 
 fn default_true() -> bool {
@@ -54,6 +60,8 @@ impl Prefs {
             .unwrap_or(Prefs {
                 appearance: Appearance::System,
                 transparency: true,
+                check_updates: true,
+                dismissed_update: None,
             })
     }
 

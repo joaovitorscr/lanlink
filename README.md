@@ -22,15 +22,29 @@ Keep lanlink open while you play. `lanlink-cli.exe` in the same zip is a command
 
 ## For the player
 
-1. Get lanlink: the zip from GitHub Releases on Windows, or the macOS build (see Developers below).
+1. Get lanlink: the Windows zip described above, or the macOS zip (see [macOS](#macos) below).
 2. Open lanlink. In the **Peers** tab, add your friend using the ID they sent you.
 3. Wait for your friend to click **Allow**. If the connection drops, click **Reconnect**.
 4. Open the **Tunnels** tab. It shows a local address such as `127.0.0.1:25565` for each game your friend shares.
 5. In Minecraft, go to *Multiplayer → Direct Connection* and enter that address.
 
+## macOS
+
+1. From the release marked **Latest** on GitHub Releases, download `lanlink-<version>-macos-arm64.zip` for Apple Silicon (M1 and newer) or `lanlink-<version>-macos-x64.zip` for Intel Macs.
+2. Double-click the zip. It unpacks into a folder with `lanlink.app` and `lanlink` (the command-line version, which you don't need). Drag `lanlink.app` to Applications if you like.
+3. The first time, **right-click `lanlink.app` and choose Open**, then click **Open** in the dialog. The app isn't notarized by Apple, so a plain double-click only says it can't be checked for malware. On recent macOS versions, if there's no Open button, go to *System Settings → Privacy & Security* and click **Open Anyway**. Alternatively, clear the download quarantine in Terminal:
+
+   ```sh
+   xattr -dr com.apple.quarantine /Applications/lanlink.app
+   ```
+
+   After the first launch it opens normally.
+
 ## Settings
 
 The **Settings** tab lets you change your display name and the relay server, and has a button that opens the logs folder.
+
+Under **Updates**, lanlink checks GitHub for a newer release shortly after it starts and then every 6 hours. Stable builds look for the next stable release, nightly builds for the next nightly. When one is out, a banner at the top of the window links to its download page. You can turn the check off there, or click **Check now**. lanlink never downloads or installs anything by itself.
 
 ## Troubleshooting
 
@@ -69,7 +83,7 @@ gpui uses the `runtime_shaders` feature, so macOS builds don't need the Metal to
 
 ### Scripts
 
-- `scripts/bundle-macos.sh` builds the release GUI into `dist/lanlink.app` (ad-hoc signed, opens with a double-click).
+- `scripts/bundle-macos.sh` builds the release GUI into `dist/lanlink.app` (ad-hoc signed, opens with a double-click) and the CLI into `dist/lanlink`. Options: `--target <triple>` (e.g. `x86_64-apple-darwin`, needs `rustup target add`), `--out <dir>`, `--locked`. The bundle version comes from `LANLINK_VERSION`, else `Cargo.toml`. The release workflow uses this script.
 - `scripts/build-windows-cli.sh` cross-compiles the CLI to `dist/lanlink-cli.exe` from macOS. Needs `rustup` and `brew install mingw-w64`.
 - `scripts/make-icons.sh` regenerates `assets/icon.{png,ico,icns}` from `assets/icon.svg`. Needs `brew install librsvg`.
 
@@ -77,16 +91,18 @@ gpui uses the `runtime_shaders` feature, so macOS builds don't need the Metal to
 
 ### CI and releases
 
-**CI** (`.github/workflows/build.yml`) runs on pushes to `main` and on pull requests. It checks formatting, runs the core tests, runs clippy on Linux, and runs clippy for the GUI and CLI on Windows. It does not produce downloads.
+**CI** (`.github/workflows/build.yml`) runs on pushes to `main` and on pull requests. It checks formatting, runs the core tests on Linux and Windows, runs clippy on Linux, runs clippy for the GUI and CLI on Windows, and checks dependencies against the RustSec advisory database with `cargo deny` (settings in `deny.toml`). Cargo commands use `--locked`, so commit `Cargo.lock` changes. CI does not produce downloads.
 
 **Releases** (`.github/workflows/release.yml`) have two channels:
 
 | Channel | How it's published | Version | Platforms |
 |---|---|---|---|
 | Nightly | Daily at 05:17 UTC, only if `main` has new commits. Or by hand: Actions, release, Run workflow, channel nightly. | `0.1.0-nightly.20261008.12` | Windows |
-| Stable | Push a tag matching the Cargo version, e.g. `git tag v0.2.0 && git push origin v0.2.0`. Or by hand with channel stable, which promotes the latest nightly's commit. | `0.2.0` | Windows, macOS |
+| Stable | Push a tag matching the Cargo version, e.g. `git tag v0.2.0 && git push origin v0.2.0`. Or by hand with channel stable, which promotes the latest nightly's commit. | `0.2.0` | Windows, macOS (Apple Silicon and Intel) |
 
-Nightlies are GitHub pre-releases and never marked Latest, so `releases/latest` always points at stable. Only the newest 10 nightlies are kept. The app shows its version and channel at the bottom of Settings, and `lanlink-cli --version` prints the version.
+Nightlies are GitHub pre-releases and never marked Latest, so `releases/latest` always points at stable. Only the newest 10 nightlies are kept. The app shows its version and channel at the top of Settings, and `lanlink-cli --version` prints the version.
+
+The app's update check calls the GitHub releases API for the repo in `build_info::REPO` (`joaovitorscr/lanlink`; set `LANLINK_REPO=owner/name` at build time for a fork). Local builds have channel `dev` and never check. The API needs no token, but only for a public repo: while this repo is private the check gets a 404, which is logged at debug level and shown in Settings as "Couldn't check for updates".
 
 To cut a stable release, bump `version` under `[workspace.package]` in `Cargo.toml`, merge it, wait for a nightly to include it, then run the workflow with channel stable.
 

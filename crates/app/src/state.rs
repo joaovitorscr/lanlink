@@ -21,7 +21,12 @@ use tokio::sync::{broadcast, mpsc};
 
 use crate::format;
 use crate::theme::Prefs;
+use crate::update::{self, Release};
 use crate::widgets::text_input::{InputEvent, TextInput};
+
+/// First update check this long after startup, then every [`UPDATE_INTERVAL`].
+const UPDATE_FIRST_DELAY: Duration = Duration::from_secs(10);
+const UPDATE_INTERVAL: Duration = Duration::from_secs(6 * 60 * 60);
 
 /// A modal sheet dropping from the title bar.
 #[derive(Clone, PartialEq, Eq)]
@@ -57,6 +62,7 @@ pub enum Msg {
     Error(String),
     Info(String),
     RelaySaved(bool),
+    UpdateChecked(Result<Option<Release>, String>),
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -92,6 +98,17 @@ impl<T> Polled<T> {
             Err(_) => self.available = false,
         }
     }
+}
+
+/// Outcome of the update checks so far.
+#[derive(Default)]
+pub struct UpdateStatus {
+    pub checking: bool,
+    /// When the last check finished, successful or not.
+    pub last_check: Option<Instant>,
+    pub failed: bool,
+    /// Newer release from the last successful check.
+    pub available: Option<Release>,
 }
 
 pub struct Toast {
@@ -145,6 +162,7 @@ pub struct Root {
     pub prefs: Prefs,
     background: Option<gpui::WindowBackgroundAppearance>,
     pub restart_required: bool,
+    pub update: UpdateStatus,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -168,6 +186,24 @@ impl Root {
             }
         })
         .detach();
+
+        if update::supported() {
+            cx.spawn(async move |this, cx| {
+                cx.background_executor().timer(UPDATE_FIRST_DELAY).await;
+                loop {
+                    let res = this.update(cx, |s, cx| {
+                        if s.prefs.check_updates {
+                            s.check_for_updates(cx);
+                        }
+                    });
+                    if res.is_err() {
+                        break;
+                    }
+                    cx.background_executor().timer(UPDATE_INTERVAL).await;
+                }
+            })
+            .detach();
+        }
 
         // Start the node. A panic inside core surfaces as a JoinError.
         let start_tx = tx.clone();
@@ -232,6 +268,7 @@ impl Root {
             prefs: Prefs::load(),
             background: None,
             restart_required: false,
+            update: UpdateStatus::default(),
             _subscriptions: subscriptions,
         }
     }
@@ -268,6 +305,20 @@ impl Root {
                 self.restart_required |= restart;
                 self.show_toast("Relay saved", false, cx);
                 self.resync();
+            }
+            Msg::UpdateChecked(res) => {
+                self.update.checking = false;
+                self.update.last_check = Some(Instant::now());
+                match res {
+                    Ok(release) => {
+                        self.update.failed = false;
+                        self.update.available = release;
+                    }
+                    Err(e) => {
+                        tracing::debug!("update check failed: {e}");
+                        self.update.failed = true;
+                    }
+                }
             }
         }
         cx.notify();
@@ -652,6 +703,54 @@ impl Root {
         config.disable_lan_detection = !config.disable_lan_detection;
         self.config = config.clone();
         self.run(move |n| async move { n.update_config(config).await });
+    }
+
+    // ---- updates ----
+
+    /// Ask GitHub for a newer release in the background. Failures are only logged.
+    pub fn check_for_updates(&mut self, cx: &mut Context<Self>) {
+        if !update::supported() || self.update.checking {
+            return;
+        }
+        self.update.checking = true;
+        let tx = self.tx.clone();
+        self.rt.spawn(async move {
+            let res = match tokio::spawn(update::check()).await {
+                Ok(Ok(release)) => Ok(release),
+                Ok(Err(e)) => Err(format!("{e:#}")),
+                Err(e) => Err(panic_text(e)),
+            };
+            let _ = tx.send(Msg::UpdateChecked(res));
+        });
+        cx.notify();
+    }
+
+    /// The release to announce in the banner: newer, not dismissed, checks enabled.
+    pub fn update_banner(&self) -> Option<&Release> {
+        let r = self.update.available.as_ref()?;
+        let dismissed = self.prefs.dismissed_update.as_deref() == Some(r.version.as_str());
+        (self.prefs.check_updates && !dismissed).then_some(r)
+    }
+
+    pub fn dismiss_update(&mut self, cx: &mut Context<Self>) {
+        if let Some(r) = &self.update.available {
+            self.prefs.dismissed_update = Some(r.version.clone());
+            self.save_prefs(cx);
+        }
+    }
+
+    pub fn toggle_update_checks(&mut self, cx: &mut Context<Self>) {
+        self.prefs.check_updates = !self.prefs.check_updates;
+        self.save_prefs(cx);
+        if self.prefs.check_updates {
+            self.check_for_updates(cx);
+        }
+    }
+
+    pub fn open_url(&mut self, url: String, cx: &mut Context<Self>) {
+        if let Err(e) = open::that(&url) {
+            self.show_error(format!("Could not open {url}: {e}"), cx);
+        }
     }
 
     pub fn open_folder(&mut self, path: std::path::PathBuf, cx: &mut Context<Self>) {

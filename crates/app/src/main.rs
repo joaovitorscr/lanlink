@@ -6,6 +6,7 @@ mod format;
 mod glass;
 mod state;
 mod theme;
+mod update;
 mod views;
 mod widgets;
 

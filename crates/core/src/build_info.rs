@@ -1,5 +1,6 @@
 //! Which build this is. The release workflow sets LANLINK_VERSION, LANLINK_CHANNEL and
 //! LANLINK_COMMIT at compile time; local builds fall back to the Cargo version and "dev".
+//! LANLINK_REPO can point update checks at a fork.
 
 /// Full version, e.g. "0.2.0" or "0.2.0-nightly.20261008.12".
 pub const VERSION: &str = match option_env!("LANLINK_VERSION") {
@@ -17,6 +18,12 @@ pub const CHANNEL: &str = match option_env!("LANLINK_CHANNEL") {
 pub const COMMIT: &str = match option_env!("LANLINK_COMMIT") {
     Some(c) => c,
     None => "",
+};
+
+/// GitHub "owner/name" whose releases the app checks for updates.
+pub const REPO: &str = match option_env!("LANLINK_REPO") {
+    Some(r) => r,
+    None => "joaovitorscr/lanlink",
 };
 
 /// One line for About screens and `--version`, e.g. "0.2.0-nightly.20261008.12 (nightly, 1a2b3c4d5e6f)".

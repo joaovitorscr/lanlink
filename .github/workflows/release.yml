@@ -10,7 +10,8 @@ name: release
 # stable   Either push a tag vX.Y.Z (must match the workspace version in Cargo.toml),
 #          or run this workflow by hand with channel=stable, which promotes the commit
 #          of the latest nightly so stable only ships a build nightly users already ran.
-#          Marked "latest", so /releases/latest always points at stable. Windows + macOS.
+#          Marked "latest", so /releases/latest always points at stable. Windows + macOS
+#          (Apple Silicon and Intel).
 #
 # Old nightlies are pruned, keeping the newest 10.
 
@@ -141,7 +142,7 @@ jobs:
         with:
           key: release
       - name: Build
-        run: cargo build --release --target x86_64-pc-windows-msvc -p lanlink-app -p lanlink-cli
+        run: cargo build --locked --release --target x86_64-pc-windows-msvc -p lanlink-app -p lanlink-cli
       - name: Package
         shell: pwsh
         run: |
@@ -161,7 +162,7 @@ jobs:
     needs: resolve
     if: needs.resolve.outputs.publish == 'true' && needs.resolve.outputs.channel == 'stable'
     runs-on: macos-latest
-    timeout-minutes: 45
+    timeout-minutes: 90
     env:
       LANLINK_VERSION: ${{ needs.resolve.outputs.version }}
       LANLINK_CHANNEL: ${{ needs.resolve.outputs.channel }}
@@ -172,24 +173,32 @@ jobs:
           ref: ${{ needs.resolve.outputs.ref }}
       - uses: dtolnay/rust-toolchain@stable
         with:
-          targets: aarch64-apple-darwin
+          targets: aarch64-apple-darwin, x86_64-apple-darwin
       - uses: Swatinem/rust-cache@v2
         with:
           key: release
-      - name: Build
-        run: cargo build --release --target aarch64-apple-darwin -p lanlink-app -p lanlink-cli
+      # bundle-macos.sh builds lanlink.app (Info.plist with LANLINK_VERSION, icon, ad-hoc
+      # signature) plus the lanlink CLI into the --out folder. A bare executable is
+      # refused by Gatekeeper, the .app can be opened with right-click > Open.
+      - name: Bundle (Apple Silicon)
+        run: scripts/bundle-macos.sh --locked --target aarch64-apple-darwin --out "dist/lanlink-${LANLINK_VERSION}-macos-arm64"
+      # Intel is cross-compiled on the same arm64 runner, so it costs build time but no
+      # extra runner start-up or cache. Stable releases only, so a few minutes per release.
+      - name: Bundle (Intel)
+        run: scripts/bundle-macos.sh --locked --target x86_64-apple-darwin --out "dist/lanlink-${LANLINK_VERSION}-macos-x64"
       - name: Package
         run: |
-          name="lanlink-${LANLINK_VERSION}-macos-arm64"
-          mkdir -p dist
-          out=target/aarch64-apple-darwin/release
-          cp "$out/lanlink-app" dist/lanlink-app
-          cp "$out/lanlink" dist/lanlink
-          (cd dist && zip -9 "../$name.zip" lanlink-app lanlink)
+          set -euo pipefail
+          for arch in arm64 x64; do
+            name="lanlink-${LANLINK_VERSION}-macos-${arch}"
+            # ditto keeps the bundle's symlinks, permissions and signature intact; zip -r
+            # can break them. --keepParent puts everything in a lanlink-<version> folder.
+            ditto -c -k --keepParent "dist/$name" "$name.zip"
+          done
       - uses: actions/upload-artifact@v4
         with:
           name: macos
-          path: lanlink-*-macos-arm64.zip
+          path: lanlink-*-macos-*.zip
           retention-days: 7
 
   publish:
@@ -244,7 +253,9 @@ jobs:
               echo "Stable release $VERSION (\`$SHORT_SHA\`)."
               echo
               echo "Windows: download \`lanlink-$VERSION-windows-x64.zip\`, unzip it and run \`lanlink.exe\`."
-              echo "macOS (Apple Silicon): \`lanlink-$VERSION-macos-arm64.zip\`."
+              echo "macOS: \`lanlink-$VERSION-macos-arm64.zip\` (Apple Silicon) or \`lanlink-$VERSION-macos-x64.zip\` (Intel)."
+              echo "The app is not notarized: the first time, right-click \`lanlink.app\` and choose Open,"
+              echo "or run \`xattr -dr com.apple.quarantine lanlink.app\`."
               echo
               if [ -n "$prev_stable" ]; then
                 echo "### Changes since $prev_stable"
