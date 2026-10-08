@@ -12,7 +12,7 @@ use tokio::sync::{broadcast, mpsc};
 
 use crate::format;
 use crate::theme::Prefs;
-use crate::update::{self, Release};
+use crate::update::{self, Release, Staged};
 use crate::widgets::text_input::{InputEvent, TextInput};
 
 /// First update check this long after startup, then every [`UPDATE_INTERVAL`].
@@ -54,6 +54,15 @@ pub enum Msg {
     Info(String),
     RelaySaved(bool),
     UpdateChecked(Result<Option<Release>, String>),
+    UpdateProgress {
+        version: String,
+        done: u64,
+        total: Option<u64>,
+    },
+    UpdatePrepared {
+        version: String,
+        result: Result<Staged, String>,
+    },
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -73,6 +82,24 @@ pub struct UpdateStatus {
     pub failed: bool,
     /// Newer release from the last successful check.
     pub available: Option<Release>,
+    /// Download / install of a release, once started.
+    pub download: Option<UpdateDownload>,
+}
+
+pub struct UpdateDownload {
+    pub version: String,
+    pub phase: UpdatePhase,
+    /// Install as soon as the download is verified (the user clicked Install). Background
+    /// downloads wait for "Restart to update".
+    install_when_ready: bool,
+}
+
+#[derive(Clone)]
+pub enum UpdatePhase {
+    Downloading { done: u64, total: Option<u64> },
+    Ready(Staged),
+    Installing,
+    Failed(String),
 }
 
 pub struct Toast {
@@ -126,6 +153,8 @@ pub struct Root {
     background: Option<gpui::WindowBackgroundAppearance>,
     pub restart_required: bool,
     pub update: UpdateStatus,
+    /// Update to run once the app has shut down (see `update::relaunch`).
+    pub pending_install: Option<Staged>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -166,6 +195,14 @@ impl Root {
                 }
             })
             .detach();
+            rt.spawn_blocking(update::cleanup);
+        }
+        if std::env::args().any(|a| a == update::FAILED_ARG) {
+            tracing::warn!("the update installer did not finish");
+            let _ = tx.send(Msg::Error(format!(
+                "The update didn't install. You're still on lanlink {}.",
+                lanlink_core::build_info::VERSION
+            )));
         }
 
         // Start the node. A panic inside core surfaces as a JoinError.
@@ -232,6 +269,7 @@ impl Root {
             background: None,
             restart_required: false,
             update: UpdateStatus::default(),
+            pending_install: None,
             _subscriptions: subscriptions,
         }
     }
@@ -270,8 +308,12 @@ impl Root {
                 self.update.last_check = Some(Instant::now());
                 match res {
                     Ok(release) => {
+                        if let Some(r) = &release {
+                            tracing::info!("update available: lanlink {}", r.version);
+                        }
                         self.update.failed = false;
                         self.update.available = release;
+                        self.auto_download_update(cx);
                     }
                     Err(e) => {
                         tracing::debug!("update check failed: {e}");
@@ -279,6 +321,18 @@ impl Root {
                     }
                 }
             }
+            Msg::UpdateProgress {
+                version,
+                done,
+                total,
+            } => {
+                if let Some(d) = self.update.download.as_mut() {
+                    if d.version == version && matches!(d.phase, UpdatePhase::Downloading { .. }) {
+                        d.phase = UpdatePhase::Downloading { done, total };
+                    }
+                }
+            }
+            Msg::UpdatePrepared { version, result } => self.on_update_prepared(version, result, cx),
         }
         cx.notify();
     }
@@ -650,6 +704,132 @@ impl Root {
         let r = self.update.available.as_ref()?;
         let dismissed = self.prefs.dismissed_update.as_deref() == Some(r.version.as_str());
         (self.prefs.check_updates && !dismissed).then_some(r)
+    }
+
+    /// Progress of the download / install of the announced release, if started.
+    pub fn update_phase(&self) -> Option<&UpdatePhase> {
+        let r = self.update.available.as_ref()?;
+        let d = self.update.download.as_ref()?;
+        (d.version == r.version).then_some(&d.phase)
+    }
+
+    /// The banner's / settings' Install button: download, verify, then install and restart.
+    pub fn install_update(&mut self, cx: &mut Context<Self>) {
+        let Some(release) = self.update.available.clone() else {
+            return;
+        };
+        match self.update_phase().cloned() {
+            Some(UpdatePhase::Ready(staged)) => self.apply_update(staged, cx),
+            Some(UpdatePhase::Downloading { .. }) => {
+                if let Some(d) = self.update.download.as_mut() {
+                    d.install_when_ready = true;
+                }
+            }
+            Some(UpdatePhase::Installing) => {}
+            None | Some(UpdatePhase::Failed(_)) => self.start_update_download(&release, true, cx),
+        }
+    }
+
+    /// With "Install updates automatically", fetch a newly found release in the background.
+    /// A failed download is not retried until the next release or a click on Install.
+    fn auto_download_update(&mut self, cx: &mut Context<Self>) {
+        if !self.prefs.auto_install || !self.prefs.check_updates || self.update_phase().is_some() {
+            return;
+        }
+        if let Some(release) = self.update.available.clone() {
+            self.start_update_download(&release, false, cx);
+        }
+    }
+
+    fn start_update_download(&mut self, release: &Release, install: bool, cx: &mut Context<Self>) {
+        let Some(plan) = update::plan(release) else {
+            return;
+        };
+        let version = release.version.clone();
+        self.update.download = Some(UpdateDownload {
+            version: version.clone(),
+            phase: UpdatePhase::Downloading {
+                done: 0,
+                total: None,
+            },
+            install_when_ready: install,
+        });
+        let tx = self.tx.clone();
+        self.rt.spawn(async move {
+            let progress_tx = tx.clone();
+            let progress_version = version.clone();
+            let mut sent = 0u64;
+            let progress = move |done: u64, total: Option<u64>| {
+                // A message per 256 KiB is plenty for a progress line.
+                if done == 0 || done - sent >= 256 * 1024 || Some(done) == total {
+                    sent = done;
+                    let _ = progress_tx.send(Msg::UpdateProgress {
+                        version: progress_version.clone(),
+                        done,
+                        total,
+                    });
+                }
+            };
+            let result = update::prepare(plan, progress)
+                .await
+                .map_err(|e| format!("{e:#}"));
+            let _ = tx.send(Msg::UpdatePrepared { version, result });
+        });
+        cx.notify();
+    }
+
+    fn on_update_prepared(
+        &mut self,
+        version: String,
+        result: Result<Staged, String>,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(d) = self
+            .update
+            .download
+            .as_mut()
+            .filter(|d| d.version == version)
+        else {
+            return;
+        };
+        match result {
+            Ok(staged) => {
+                d.phase = UpdatePhase::Ready(staged.clone());
+                if d.install_when_ready {
+                    self.apply_update(staged, cx);
+                }
+            }
+            Err(e) => {
+                tracing::warn!("update to {version} failed: {e}");
+                d.phase = UpdatePhase::Failed(e);
+            }
+        }
+    }
+
+    /// Put the update in place and quit; `main` relaunches it after the clean shutdown.
+    pub fn apply_update(&mut self, staged: Staged, cx: &mut Context<Self>) {
+        let phase = match update::commit(&staged) {
+            Ok(()) => {
+                self.pending_install = Some(staged);
+                // Quit outside this entity update: the quit handler reads `Root`.
+                cx.defer(|cx| cx.quit());
+                UpdatePhase::Installing
+            }
+            Err(e) => {
+                tracing::warn!("installing the update failed: {e:#}");
+                UpdatePhase::Failed(format!("{e:#}"))
+            }
+        };
+        if let Some(d) = self.update.download.as_mut() {
+            d.phase = phase;
+        }
+        cx.notify();
+    }
+
+    pub fn toggle_auto_install(&mut self, cx: &mut Context<Self>) {
+        self.prefs.auto_install = !self.prefs.auto_install;
+        self.save_prefs(cx);
+        self.auto_download_update(cx);
     }
 
     pub fn dismiss_update(&mut self, cx: &mut Context<Self>) {

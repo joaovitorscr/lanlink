@@ -14,7 +14,7 @@ Connections are end-to-end encrypted, and only people you have allowed can conne
 - Direct peer-to-peer connections with NAT hole punching, falling back to a relay. You can run your own relay.
 - Live connection info per friend: direct or relayed, latency, jitter and traffic.
 - Desktop app with a tray or menu bar icon, plus a command-line version for headless machines.
-- Built-in update check that tells you when a new release is out.
+- Built-in updates: lanlink tells you when a new release is out and can install it for you.
 
 ## Platform support
 
@@ -207,12 +207,12 @@ The **Settings** tab has these sections:
 | Network | The relay server (empty means the public relays; restart lanlink after changing it). **Detect Minecraft LAN worlds**. **Log latency**, which writes every ping to a daily CSV in the logs folder and keeps the last 7 days. |
 | Background | **Keep running in the background when the window is closed** (on by default). **Launch at login** (off by default). |
 | Appearance | Light, dark or system theme. Window transparency. |
-| Updates | Turn the update check on or off, and **Check now**. |
+| Updates | Turn the update check on or off, **Install updates automatically**, and **Check now**. |
 | Files | **Open** buttons for the logs folder and the config folder. |
 
 **Launch at login** starts lanlink hidden in the notification area or menu bar when you log in. On Windows it adds lanlink to your user's startup programs (the per-user Run key). On macOS it adds a LaunchAgent at `~/Library/LaunchAgents/lanlink.plist`. If you move `lanlink.exe` or the app, open lanlink once so the login item follows it.
 
-**Updates.** Stable and nightly builds check GitHub about 10 seconds after starting and then every 6 hours. Stable builds look for a newer stable release, nightly builds for a newer nightly. When one is out, a banner at the top of the window links to its release page, where you download and install it yourself. lanlink never downloads or installs anything on its own. Builds you compile yourself report the `dev` channel and never check.
+**Updates.** Stable and nightly builds check GitHub about 10 seconds after starting and then every 6 hours. Stable builds look for a newer stable release, nightly builds for a newer nightly. When one is out, a banner at the top of the window offers **Install update**: lanlink downloads the installer (Windows) or disk image (macOS) for your computer, checks it against the release's `SHA256SUMS`, then quits, installs it and starts again. With **Install updates automatically** on, the download happens in the background and the banner shows **Restart to update**; nothing installs until you click it. The portable Windows zip, and a macOS app run from the disk image instead of Applications, can't update themselves, so the banner links to the release page instead. Builds you compile yourself report the `dev` channel and never check.
 
 ## Troubleshooting
 
@@ -247,7 +247,7 @@ What it doesn't protect:
 - **Allowed peers are trusted.** Anyone you allow can connect to every service you share, as if they were on your LAN. Remove peers you no longer play with.
 - **The shared game itself.** lanlink doesn't filter what goes through a tunnel. A vulnerable game server is just as vulnerable to an allowed friend.
 - **Your secret key.** `identity.key` is stored unencrypted. On macOS and Linux it is created readable only by you.
-- **Release binaries are unsigned.** Windows builds aren't code-signed and macOS builds are only ad-hoc signed, not notarized. Download only from this repository's Releases page. The update check uses the GitHub API over HTTPS and never installs anything.
+- **Release binaries are unsigned.** Windows builds aren't code-signed and macOS builds are only ad-hoc signed, not notarized. Download only from this repository's Releases page. Updates are downloaded over HTTPS and only installed if they match the release's `SHA256SUMS`, which guards against corrupted downloads but not against a compromised release.
 - **Discovery.** With default settings, n0's public address lookup service sees your ID, and n0's public relays see your ID and IP address. Run your own relay if that matters to you.
 
 ## Command line

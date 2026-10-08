@@ -109,10 +109,18 @@ fn main() {
         let rt = handle.clone();
         let quitting = root.clone();
         cx.on_app_quit(move |cx| {
-            if let Some(node) = quitting.read(cx).node.clone() {
+            let root = quitting.read(cx);
+            let pending_install = root.pending_install.clone();
+            if let Some(node) = root.node.clone() {
                 lifecycle::shutdown_node(&rt, node);
             }
             remove_tray(cx);
+            // Only now, with the instance lock released and peers told we left.
+            if let Some(staged) = pending_install {
+                if let Err(e) = update::relaunch(&staged) {
+                    tracing::warn!("starting the update failed: {e:#}");
+                }
+            }
             async {}
         })
         .detach();
