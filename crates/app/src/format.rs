@@ -31,6 +31,21 @@ pub fn progress(done: u64, total: Option<u64>) -> String {
     }
 }
 
+/// This computer's name, tidied up for display: "Joaos-MacBook-Pro.local" -> "Joaos MacBook Pro".
+pub fn device_name() -> String {
+    let raw = gethostname::gethostname().to_string_lossy().into_owned();
+    let name = raw
+        .strip_suffix(".local")
+        .unwrap_or(&raw)
+        .replace(['-', '_'], " ");
+    let name = name.trim();
+    if name.is_empty() {
+        "My computer".into()
+    } else {
+        name.to_string()
+    }
+}
+
 /// "abcdef…wxyz" for long ids, unchanged for short ones.
 pub fn short_id(id: &str) -> String {
     let chars: Vec<char> = id.chars().collect();

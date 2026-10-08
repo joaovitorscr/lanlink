@@ -31,12 +31,17 @@ impl Root {
                     ),
             )
             .child(
-                group_row(&t, true)
-                    .child(title_sub(
-                        &t,
-                        "Your ID",
-                        Some(my_id.clone().unwrap_or_else(|| "Starting…".into())),
-                    ))
+                group_row(&t, false)
+                    .child(
+                        col()
+                            .flex_1()
+                            .min_w_0()
+                            .child(div().font_weight(gpui::FontWeight::MEDIUM).child("Your ID"))
+                            .child(match &my_id {
+                                Some(id) => self.id_line(&t, id, cx).into_any_element(),
+                                None => small(&t, "Starting…").into_any_element(),
+                            }),
+                    )
                     .when_some(my_id, |el, id| {
                         el.child(
                             button(
@@ -54,6 +59,18 @@ impl Root {
                             )),
                         )
                     }),
+            )
+            .child(
+                group_row(&t, true)
+                    .child(title_sub(
+                        &t,
+                        "Hide IDs",
+                        Some("Mask your ID and peer IDs on screen, e.g. while streaming"),
+                    ))
+                    .child(
+                        toggle(&t, "hide-ids", self.prefs.hide_ids)
+                            .on_click(cx.listener(|this, _, _, cx| this.toggle_hide_ids(cx))),
+                    ),
             );
 
         let relay_sub = if self.restart_required {

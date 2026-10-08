@@ -18,6 +18,8 @@ icons!(
     "settings",
     "dots",
     "copy",
+    "eye",
+    "eye-off",
     "plus",
     "pick",
     "device-gamepad-2",

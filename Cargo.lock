@@ -3863,6 +3863,7 @@ dependencies = [
  "anyhow",
  "auto-launch",
  "dirs 6.0.0",
+ "gethostname",
  "gpui",
  "image",
  "lanlink-core",

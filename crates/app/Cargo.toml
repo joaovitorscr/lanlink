@@ -23,6 +23,7 @@ serde_json = { workspace = true }
 reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider"] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
 semver = "1"
+gethostname = "1"
 # Verifies downloaded updates against the release's SHA256SUMS.
 sha2 = "0.10"
 
