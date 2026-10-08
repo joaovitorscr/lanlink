@@ -88,11 +88,14 @@ impl Root {
     ) -> impl IntoElement {
         let svc = s.service.clone();
         let name = svc.name.clone();
-        let mut parts = vec![format!(
-            "{} {}",
-            proto_label(svc.protocol),
-            s.effective_port
-        )];
+        let mut parts = vec![match svc.host {
+            Some(_) => format!(
+                "{} {}",
+                proto_label(svc.protocol),
+                svc.local_addr(s.effective_port)
+            ),
+            None => format!("{} {}", proto_label(svc.protocol), s.effective_port),
+        }];
         if s.effective_port != svc.port {
             parts.push(format!("LAN world found, configured port {}", svc.port));
         }

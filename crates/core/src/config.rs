@@ -1,5 +1,6 @@
 use anyhow::Context;
 use serde::{Deserialize, Serialize};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -10,13 +11,17 @@ pub enum Protocol {
 }
 
 /// A service this node exposes to allowed peers.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Service {
     /// Human name, unique per node. e.g. "minecraft".
     pub name: String,
     pub protocol: Protocol,
     /// Local port on the host machine, e.g. 25565.
     pub port: u16,
+    /// Address the host connects to for this service. None = 127.0.0.1. Set it for services
+    /// that only listen on a LAN address or on IPv6 (`::1`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host: Option<IpAddr>,
     /// Disabled services are not advertised and refuse new streams. Default true.
     #[serde(default = "default_true")]
     pub enabled: bool,
@@ -33,9 +38,15 @@ impl Service {
             name: name.into(),
             protocol,
             port,
+            host: None,
             enabled: true,
             minecraft_lan: false,
         }
+    }
+
+    /// The address the host dials: `host` (default 127.0.0.1) with `port`.
+    pub fn local_addr(&self, port: u16) -> SocketAddr {
+        SocketAddr::new(self.host.unwrap_or(IpAddr::V4(Ipv4Addr::LOCALHOST)), port)
     }
 }
 
@@ -126,5 +137,29 @@ impl Config {
         std::fs::write(&tmp, serde_json::to_vec_pretty(self)?)?;
         std::fs::rename(&tmp, &path).with_context(|| format!("writing {}", path.display()))?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn service_without_host_loads_as_loopback() {
+        let svc: Service =
+            serde_json::from_str(r#"{"name":"mc","protocol":"tcp","port":25565}"#).unwrap();
+        assert_eq!(svc.host, None);
+        assert_eq!(svc.local_addr(svc.port), "127.0.0.1:25565".parse().unwrap());
+        // Old configs keep their exact shape when no host is set.
+        assert!(!serde_json::to_string(&svc).unwrap().contains("host"));
+    }
+
+    #[test]
+    fn service_host_round_trips() {
+        let mut svc = Service::new("mc", Protocol::Tcp, 25565);
+        svc.host = Some("::1".parse().unwrap());
+        let back: Service = serde_json::from_str(&serde_json::to_string(&svc).unwrap()).unwrap();
+        assert_eq!(back, svc);
+        assert_eq!(back.local_addr(25565), "[::1]:25565".parse().unwrap());
     }
 }

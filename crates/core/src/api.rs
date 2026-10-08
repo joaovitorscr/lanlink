@@ -1,8 +1,5 @@
-//! v2 management API: everything the GUI needs so nobody has to use a terminal.
-//!
-//! CONTRACT shared by `cli` and `app`. The signatures below are fixed; implementers replace
-//! the `todo!()` bodies (and may move them into other modules as long as the paths in lib.rs
-//! still resolve). Behaviour each method must have is documented on it.
+//! Management API: everything the GUI needs so nobody has to use a terminal
+//! (peers and requests, hosted services, saved tunnels, settings, logging).
 //!
 //! Polling vs events: discrete changes arrive as `NodeEvent`s. Fast-changing counters
 //! (bytes, connection counts, service reachability) are read by the UI about once a second
@@ -40,7 +37,8 @@ pub struct NetworkStatus {
 #[derive(Debug, Clone)]
 pub struct ServiceStatus {
     pub service: Service,
-    /// TCP: something is listening on 127.0.0.1:port (probed every few seconds).
+    /// TCP: something is listening on the service address (`Service::local_addr`), probed
+    /// every few seconds.
     /// UDP: None, it cannot be probed.
     pub reachable: Option<bool>,
     /// Port actually forwarded to. Differs from `service.port` when a Minecraft LAN world

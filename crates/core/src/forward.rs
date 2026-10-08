@@ -1,52 +1,15 @@
 //! TCP <-> QUIC stream copying and UDP <-> datagram relaying.
 
-use crate::protocol::{encode_datagrams, read_msg, write_msg, StreamHeader};
-use crate::{Protocol, Service};
+use crate::protocol::encode_datagrams;
 use anyhow::Context;
 use iroh::endpoint::{Connection, RecvStream, SendDatagramError, SendStream};
-use std::net::{Ipv4Addr, SocketAddr};
+use std::net::SocketAddr;
 use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU64, Ordering};
 use std::sync::Arc;
 use tokio::net::{TcpStream, UdpSocket};
 
 /// Receive buffer for local UDP sockets, large enough for any UDP payload.
 pub(crate) const UDP_BUF: usize = 64 * 1024;
-
-/// Client side: forward one accepted local TCP socket over a fresh bi stream.
-pub async fn client_tcp(
-    conn: Connection,
-    service: String,
-    mut tcp: TcpStream,
-) -> anyhow::Result<()> {
-    tcp.set_nodelay(true)?;
-    let (mut send, recv) = conn.open_bi().await?;
-    write_msg(&mut send, &StreamHeader { service }).await?;
-    let mut quic = tokio::io::join(recv, send);
-    tokio::io::copy_bidirectional(&mut tcp, &mut quic).await?;
-    Ok(())
-}
-
-/// Host side: handle an incoming data stream. Reads the header and connects to the local service.
-pub async fn host_tcp(
-    services: Vec<Service>,
-    mut send: SendStream,
-    mut recv: RecvStream,
-) -> anyhow::Result<()> {
-    let header: StreamHeader = read_msg(&mut recv).await?;
-    let Some(svc) = services
-        .iter()
-        .find(|s| s.name == header.service && s.protocol == Protocol::Tcp)
-    else {
-        tracing::warn!(service = %header.service, "refusing stream for unknown service");
-        let _ = send.reset(1u32.into());
-        return Ok(());
-    };
-    let mut tcp = TcpStream::connect((Ipv4Addr::LOCALHOST, svc.port)).await?;
-    tcp.set_nodelay(true)?;
-    let mut quic = tokio::io::join(recv, send);
-    tokio::io::copy_bidirectional(&mut tcp, &mut quic).await?;
-    Ok(())
-}
 
 /// Send state of one UDP flow in one direction.
 #[derive(Default)]

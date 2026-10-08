@@ -3,17 +3,20 @@ use crate::forward::{self, ClientFlow, Counters, FlowSender, UDP_BUF};
 use crate::instance::InstanceLock;
 use crate::lan;
 use crate::protocol::{
-    decode_datagram, read_msg, write_msg, ControlMsg, DatagramHeader, Reassembler, StreamHeader,
+    decode_datagram, read_frame, read_msg, write_msg, ControlMsg, DatagramHeader, Reassembler,
+    StreamHeader,
 };
 use crate::stats::{LatencyLog, LatencyStats, LatencyWindow};
 use crate::NodeId;
 use crate::{ActiveTunnel, Config, Protocol, SavedTunnel, Service, ALPN};
 use anyhow::{bail, Context};
 use iroh::address_lookup::MemoryLookup;
-use iroh::endpoint::{presets, Connection, ConnectionError, RecvStream, SendStream};
+use iroh::endpoint::{
+    presets, Connection, ConnectionError, ReadError, RecvStream, SendStream, VarInt, WriteError,
+};
 use iroh::{Endpoint, EndpointAddr, RelayMode, RelayUrl, SecretKey, Watcher};
 use std::collections::HashMap;
-use std::net::{Ipv4Addr, SocketAddr};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::path::Path;
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
@@ -30,6 +33,12 @@ const CLOSE_NOT_ALLOWED: u32 = 1;
 const CLOSE_SHUTDOWN: u32 = 2;
 /// We do not know the dialer yet; it was recorded as a connection request.
 const CLOSE_PENDING: u32 = 3;
+/// Data stream reset codes (host -> client).
+const RESET_UNKNOWN_SERVICE: u32 = 1;
+/// The host could not connect to the local service (nothing listening there).
+const RESET_NOT_LISTENING: u32 = 2;
+/// At most one "nothing is listening" error per tunnel in this window.
+const NOT_LISTENING_REPORT_GAP: Duration = Duration::from_secs(60);
 
 const DIAL_TIMEOUT: Duration = Duration::from_secs(10);
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
@@ -127,6 +136,8 @@ pub(crate) struct TunnelLive {
     pub(crate) down: Arc<AtomicU64>,
     /// Open TCP connections, or live UDP flows (local senders).
     pub(crate) conns: AtomicU32,
+    /// Milliseconds since node epoch of the last "nothing is listening" error (0 = never).
+    last_error_ms: AtomicU64,
 }
 
 /// Total tunnel bytes per peer.
@@ -792,7 +803,9 @@ impl Node {
             .flat_map(|e| e.controls.iter().map(|(_, s)| s.clone()))
             .collect();
         for send in controls {
-            let msg = ControlMsg::Services(services.clone());
+            let msg = ControlMsg::Services {
+                services: services.clone(),
+            };
             tokio::spawn(async move {
                 if let Err(e) = write_msg(&mut *send.lock().await, &msg).await {
                     tracing::debug!("pushing services: {e:#}");
@@ -804,7 +817,9 @@ impl Node {
     /// A push that ran while a handshake was in flight missed that connection; send it now.
     fn resend_services_if_changed(&self, gen: u64, send: &ControlSend) {
         if self.inner.svc_gen.load(Ordering::SeqCst) != gen {
-            let msg = ControlMsg::Services(self.advertised_services());
+            let msg = ControlMsg::Services {
+                services: self.advertised_services(),
+            };
             let send = send.clone();
             tokio::spawn(async move {
                 let _ = write_msg(&mut *send.lock().await, &msg).await;
@@ -1058,7 +1073,13 @@ impl Node {
                 },
             )
             .await?;
-            write_msg(&mut send, &ControlMsg::Services(self.advertised_services())).await?;
+            write_msg(
+                &mut send,
+                &ControlMsg::Services {
+                    services: self.advertised_services(),
+                },
+            )
+            .await?;
             let (name, services) = handshake_read(&mut recv).await?;
             anyhow::Ok((send, recv, name, services))
         }
@@ -1219,7 +1240,13 @@ impl Node {
                 },
             )
             .await?;
-            write_msg(&mut send, &ControlMsg::Services(self.advertised_services())).await?;
+            write_msg(
+                &mut send,
+                &ControlMsg::Services {
+                    services: self.advertised_services(),
+                },
+            )
+            .await?;
             anyhow::Ok((send, recv, name, services))
         })
         .await
@@ -1310,36 +1337,47 @@ impl Node {
         let mut set: JoinSet<()> = JoinSet::new();
 
         // Control stream reader: answer pings, record pong latency.
+        // Messages it cannot parse are skipped, so a newer peer cannot stall the stream.
         {
             let n = self.clone();
             let send = send.clone();
             set.spawn(async move {
                 loop {
-                    let msg: ControlMsg = match read_msg(&mut recv).await {
-                        Ok(m) => m,
+                    let frame = match read_frame(&mut recv).await {
+                        Ok(f) => f,
                         Err(e) => {
                             tracing::debug!(%peer, "control stream ended: {e:#}");
                             break;
                         }
                     };
+                    let msg: ControlMsg = match serde_json::from_slice(&frame) {
+                        Ok(m) => m,
+                        Err(e) => {
+                            tracing::debug!(%peer, "skipping unreadable control message: {e}");
+                            continue;
+                        }
+                    };
                     match msg {
-                        ControlMsg::Ping(t) => {
-                            if write_msg(&mut *send.lock().await, &ControlMsg::Pong(t))
+                        ControlMsg::Ping { t } => {
+                            if write_msg(&mut *send.lock().await, &ControlMsg::Pong { t })
                                 .await
                                 .is_err()
                             {
                                 break;
                             }
                         }
-                        ControlMsg::Pong(t) => {
+                        ControlMsg::Pong { t } => {
                             let now = n.inner.epoch.elapsed().as_micros() as u64;
                             let rtt_ms = now.saturating_sub(t) as f32 / 1000.0;
                             n.record_latency(peer, rtt_ms);
                         }
-                        ControlMsg::Services(s) => {
-                            n.update_existing_peer(peer, |e| e.info.services = s)
+                        ControlMsg::Services { services } => {
+                            n.update_existing_peer(peer, |e| e.info.services = services)
                         }
                         ControlMsg::Hello { .. } => {}
+                        ControlMsg::Unknown => {
+                            tracing::debug!(%peer, "ignoring unknown control message");
+                        }
                     }
                 }
             });
@@ -1354,7 +1392,7 @@ impl Node {
                 loop {
                     tick.tick().await;
                     let t = n.inner.epoch.elapsed().as_micros() as u64;
-                    if write_msg(&mut *send.lock().await, &ControlMsg::Ping(t))
+                    if write_msg(&mut *send.lock().await, &ControlMsg::Ping { t })
                         .await
                         .is_err()
                     {
@@ -1504,20 +1542,22 @@ impl Node {
             .find(|s| s.name == header.service && s.protocol == Protocol::Tcp);
         let Some(svc) = svc else {
             tracing::warn!(%peer, service = %header.service, "refusing stream for unknown or disabled service");
-            let _ = send.reset(1u32.into());
+            let _ = send.reset(RESET_UNKNOWN_SERVICE.into());
             return Ok(());
         };
-        let port = self.effective_port(&svc);
-        let tcp = match tokio::time::timeout(
-            Duration::from_secs(5),
-            TcpStream::connect((Ipv4Addr::LOCALHOST, port)),
-        )
-        .await
+        let addr = svc.local_addr(self.effective_port(&svc));
+        let tcp = match tokio::time::timeout(Duration::from_secs(5), TcpStream::connect(addr)).await
         {
             Ok(Ok(t)) => t,
             res => {
-                tracing::warn!(%peer, service = %svc.name, port, "local service not reachable: {res:?}");
-                let _ = send.reset(2u32.into());
+                let why = match res {
+                    Ok(Err(e)) => e.to_string(),
+                    _ => "timed out".to_string(),
+                };
+                tracing::warn!(%peer, service = %svc.name, "cannot connect to local service at {addr}: {why}");
+                // Both directions carry the code, whichever the client notices first.
+                let _ = send.reset(RESET_NOT_LISTENING.into());
+                let _ = recv.stop(RESET_NOT_LISTENING.into());
                 return Ok(());
             }
         };
@@ -1583,13 +1623,14 @@ impl Node {
                         tracing::debug!(%peer, idx = h.service, "datagram for unknown udp service");
                         continue;
                     };
-                    match self.host_udp_flow(conn.clone(), h, svc.port).await {
+                    let addr = svc.local_addr(svc.port);
+                    match self.host_udp_flow(conn.clone(), h, addr).await {
                         Ok(mut f) => {
                             f._guard = Some(self.svc_open(&svc.name, peer, Some(f.task.clone())));
                             flows.entry(key).or_insert(f)
                         }
                         Err(e) => {
-                            tracing::warn!("udp socket for {}: {e:#}", svc.name);
+                            tracing::warn!("udp socket for {} at {addr}: {e:#}", svc.name);
                             continue;
                         }
                     }
@@ -1605,16 +1646,21 @@ impl Node {
         }
     }
 
-    /// A UDP socket "connected" to the local service for one client flow, relaying replies
-    /// back as datagrams tagged with the flow.
+    /// A UDP socket "connected" to the local service at `addr` for one client flow, relaying
+    /// replies back as datagrams tagged with the flow.
     async fn host_udp_flow(
         &self,
         conn: Connection,
         h: DatagramHeader,
-        port: u16,
+        addr: SocketAddr,
     ) -> anyhow::Result<HostFlow> {
-        let sock = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).await?;
-        sock.connect((Ipv4Addr::LOCALHOST, port)).await?;
+        let bind: SocketAddr = match addr.ip() {
+            ip if ip.is_loopback() => (ip, 0).into(),
+            IpAddr::V4(_) => (Ipv4Addr::UNSPECIFIED, 0).into(),
+            IpAddr::V6(_) => (Ipv6Addr::UNSPECIFIED, 0).into(),
+        };
+        let sock = UdpSocket::bind(bind).await?;
+        sock.connect(addr).await?;
         let sock = Arc::new(sock);
         let reader = sock.clone();
         let sent = self.peer_bytes(conn.remote_id()).sent.clone();
@@ -1673,17 +1719,31 @@ impl Node {
             let inn: Counters = vec![live.down.clone(), bytes.received.clone()];
             live.conns.fetch_add(1, Ordering::Relaxed);
             let guard = TunnelConnGuard(live.clone());
+            let live = live.clone();
             conns.spawn(async move {
                 let _guard = guard;
+                // Where the host dials, as advertised by it (for the error message).
+                let mut target = None;
                 let res = async {
-                    let (conn, _) = n.ensure_conn(peer).await?;
+                    let (conn, info) = n.ensure_conn(peer).await?;
+                    target = info
+                        .services
+                        .iter()
+                        .find(|s| s.name == service)
+                        .map(|s| s.local_addr(s.port));
                     let (mut send, recv) = conn.open_bi().await?;
-                    write_msg(&mut send, &StreamHeader { service }).await?;
+                    let header = StreamHeader {
+                        service: service.clone(),
+                    };
+                    write_msg(&mut send, &header).await?;
                     forward::copy_counted(tcp, send, recv, &out, &inn).await
                 }
                 .await;
                 if let Err(e) = res {
                     tracing::debug!(%from, "tunnel connection ended: {e:#}");
+                    if stream_error_code(&e) == Some(RESET_NOT_LISTENING.into()) {
+                        n.report_not_listening(peer, &service, target, &live);
+                    }
                 }
             });
             while conns.try_join_next().is_some() {}
@@ -1753,6 +1813,30 @@ impl Node {
             bytes.sent.fetch_add(len as u64, Ordering::Relaxed);
             flow.sender.send(&conn, index, flow.id, &buf[..len]);
         }
+    }
+
+    /// The host has nothing listening behind a tunnel: tell the user, at most once a minute
+    /// per tunnel.
+    fn report_not_listening(
+        &self,
+        peer: NodeId,
+        service: &str,
+        target: Option<SocketAddr>,
+        live: &TunnelLive,
+    ) {
+        let now = self.now_ms().max(1);
+        let last = live.last_error_ms.load(Ordering::Relaxed);
+        if last != 0 && now.saturating_sub(last) < NOT_LISTENING_REPORT_GAP.as_millis() as u64 {
+            return;
+        }
+        live.last_error_ms.store(now, Ordering::Relaxed);
+        let who = self.peer_label(&peer);
+        let msg = match target {
+            Some(addr) => format!("Nothing is listening on {addr} on {who}'s computer"),
+            None => format!("Nothing is listening behind {service} on {who}'s computer"),
+        };
+        tracing::warn!(%peer, service, "{msg}");
+        self.emit(NodeEvent::Error(msg));
     }
 
     /// Forget client UDP flows that saw no traffic for [`UDP_FLOW_IDLE`].
@@ -1843,12 +1927,9 @@ impl Node {
                 let reachable = match svc.protocol {
                     Protocol::Udp => None,
                     Protocol::Tcp => {
-                        let port = self.effective_port(&svc);
-                        let res = tokio::time::timeout(
-                            PROBE_TIMEOUT,
-                            TcpStream::connect((Ipv4Addr::LOCALHOST, port)),
-                        )
-                        .await;
+                        let addr = svc.local_addr(self.effective_port(&svc));
+                        let res =
+                            tokio::time::timeout(PROBE_TIMEOUT, TcpStream::connect(addr)).await;
                         Some(matches!(res, Ok(Ok(_))))
                     }
                 };
@@ -1983,7 +2064,20 @@ async fn handshake_read(recv: &mut RecvStream) -> anyhow::Result<(Option<String>
         other => bail!("expected Hello, got {other:?}"),
     };
     match read_msg(recv).await? {
-        ControlMsg::Services(s) => Ok((name, s)),
+        ControlMsg::Services { services } => Ok((name, services)),
         other => bail!("expected Services, got {other:?}"),
     }
+}
+
+/// The application error code a data stream failed with: the peer reset our receive side or
+/// stopped our send side.
+fn stream_error_code(e: &anyhow::Error) -> Option<VarInt> {
+    let inner = e.downcast_ref::<std::io::Error>()?.get_ref()?;
+    if let Some(ReadError::Reset(code)) = inner.downcast_ref::<ReadError>() {
+        return Some(*code);
+    }
+    if let Some(WriteError::Stopped(code)) = inner.downcast_ref::<WriteError>() {
+        return Some(*code);
+    }
+    None
 }

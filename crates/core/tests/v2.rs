@@ -275,3 +275,56 @@ async fn client_reconnects_after_host_restart() -> anyhow::Result<()> {
     host.shutdown().await?;
     Ok(())
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn nothing_listening_is_reported_once() -> anyhow::Result<()> {
+    set_test_dir();
+    // A port nothing listens on.
+    let dead_port = {
+        let l = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await?;
+        l.local_addr()?.port()
+    };
+    let host_key = SecretKey::generate();
+    let client_key = SecretKey::generate();
+    let (host_id, client_id) = (host_key.public(), client_key.public());
+    let host = Node::start_with_secret_key(
+        config(
+            &[client_id],
+            vec![Service::new("game", Protocol::Tcp, dead_port)],
+        ),
+        host_key,
+    )
+    .await?;
+    let client = Node::start_with_secret_key(config(&[host_id], vec![]), client_key).await?;
+    client.add_peer_addr(local_addr(&host));
+    host.add_peer_addr(local_addr(&client));
+    let mut events = client.subscribe();
+
+    let tunnel = tokio::time::timeout(
+        Duration::from_secs(20),
+        client.open_tunnel(host_id, "game", (Ipv4Addr::LOCALHOST, 0).into()),
+    )
+    .await??;
+    for _ in 0..3 {
+        let mut sock = TcpStream::connect(tunnel.local_addr).await?;
+        let mut buf = [0u8; 1];
+        let res = tokio::time::timeout(Duration::from_secs(10), sock.read(&mut buf)).await?;
+        assert!(!matches!(res, Ok(n) if n > 0), "nothing should come back");
+    }
+
+    // Pings keep events flowing, so collect until a fixed deadline.
+    let mut errors = Vec::new();
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
+    while let Ok(ev) = tokio::time::timeout_at(deadline, events.recv()).await {
+        if let Ok(NodeEvent::Error(e)) = ev {
+            errors.push(e);
+        }
+    }
+    let expected = format!("Nothing is listening on 127.0.0.1:{dead_port} on ");
+    let matching: Vec<_> = errors.iter().filter(|e| e.starts_with(&expected)).collect();
+    assert_eq!(matching.len(), 1, "errors = {errors:?}");
+
+    client.shutdown().await?;
+    host.shutdown().await?;
+    Ok(())
+}
