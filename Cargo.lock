@@ -3903,6 +3903,7 @@ dependencies = [
  "dirs 6.0.0",
  "fs4",
  "gethostname",
+ "getrandom 0.4.3",
  "iroh",
  "serde",
  "serde_json",

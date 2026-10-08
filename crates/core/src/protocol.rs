@@ -9,8 +9,31 @@
 //! message id, fragment index/count) followed by payload. Payloads larger than the connection's
 //! datagram limit are split into fragments, see [`encode_datagrams`].
 //! Wire version 1 (ALPN `lanlink/1`). Version 0 used a bare u16 service index per datagram.
+//!
+//! Connection setup: the dialer opens the control stream and sends `Hello` then `Services`;
+//! the acceptor answers with the same two. The acceptor only does this for allowed peers
+//! (in `allowed_peers`, or a member of a network both are in); others are closed with
+//! "pending" and shown as a connection request. Services lists are per peer: each side only
+//! sends the services the other may use (see `Service::networks`).
+//!
+//! Networks (all ignored by builds that predate them, as unknown messages):
+//! - Joining: the joiner dials the owner and sends `JoinRequest` as the FIRST control message
+//!   instead of `Hello`. This is accepted from peers that are not allowed yet. The owner answers
+//!   one `JoinResponse` and closes the connection. With an "ask me" invite the answer is
+//!   `pending`; when the owner approves later, it connects to the joiner (which accepts the
+//!   owner of a pending join) and sends `Networks`.
+//! - After the handshake both sides send `Networks` with every network the sender owns that
+//!   the receiver is a member of. It is complete: the receiver drops cached networks owned by
+//!   the sender that are missing from it (it was removed while offline).
+//! - `NetworkState` is pushed by the owner to every connected member on any change (join,
+//!   rename, removal, leave, delete). A receiver not in the member list drops the network; a
+//!   deleted network is sent with no members.
+//! - `NetworkLeave` goes from a member to the owner.
+//!
+//! Network messages are only trusted from the network's owner: the QUIC handshake
+//! authenticates the sender's NodeId, and it must equal `Network::owner`.
 
-use crate::Service;
+use crate::{Network, Service};
 use bytes::{BufMut, Bytes, BytesMut};
 use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
@@ -33,7 +56,48 @@ pub enum ControlMsg {
     Pong {
         t: u64,
     },
+    /// Joiner -> owner, first message on a new connection. `token` is from the invite code.
+    JoinRequest {
+        network: String,
+        token: String,
+        /// The joiner's display name. Untrusted, display only.
+        name: Option<String>,
+    },
+    /// Owner -> joiner, answer to `JoinRequest`. The connection is closed afterwards.
+    JoinResponse {
+        network: String,
+        status: JoinStatus,
+        /// Approved: the network as members see it. Pending: name and owner only, so the
+        /// joiner can show what it is waiting for.
+        state: Option<Network>,
+        /// Rejected: why, in plain words.
+        reason: Option<String>,
+    },
+    /// Owner -> member: the current state of one network. Replaces the member's copy.
+    NetworkState {
+        network: Network,
+    },
+    /// Sent once after the handshake: every network the sender owns that the receiver is in.
+    Networks {
+        networks: Vec<Network>,
+    },
+    /// Member -> owner: remove me from this network.
+    NetworkLeave {
+        network: String,
+    },
     /// A message type this build does not know (sent by a newer build). Ignored.
+    #[serde(other)]
+    Unknown,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum JoinStatus {
+    Approved,
+    /// The owner has to approve; it connects to the joiner when it does.
+    Pending,
+    Rejected,
+    /// A status this build does not know.
     #[serde(other)]
     Unknown,
 }
@@ -338,6 +402,24 @@ mod compat_tests {
             },
             ControlMsg::Ping { t: 7 },
             ControlMsg::Pong { t: 7 },
+            ControlMsg::JoinRequest {
+                network: "ab".into(),
+                token: "cd".into(),
+                name: Some("bo".into()),
+            },
+            ControlMsg::JoinResponse {
+                network: "ab".into(),
+                status: JoinStatus::Pending,
+                state: None,
+                reason: None,
+            },
+            ControlMsg::NetworkState {
+                network: Network::new("crew", crate::SecretKey::generate().public(), "ana"),
+            },
+            ControlMsg::Networks { networks: vec![] },
+            ControlMsg::NetworkLeave {
+                network: "ab".into(),
+            },
         ];
         for msg in msgs {
             let json = serde_json::to_string(&msg).unwrap();
