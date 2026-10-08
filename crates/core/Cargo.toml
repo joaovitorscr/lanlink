@@ -17,6 +17,7 @@ tracing-subscriber.workspace = true
 tracing-appender = "0.2"
 socket2 = { version = "0.6", features = ["all"] }
 gethostname = "1"
+fs4 = "1"
 
 [dev-dependencies]
 iroh.workspace = true

@@ -1,5 +1,6 @@
 use crate::api::{LanWorld, NetworkStatus, PeerRequest};
 use crate::forward::{self, Counters, UdpClient};
+use crate::instance::InstanceLock;
 use crate::lan;
 use crate::protocol::{
     decode_datagram, encode_datagram, read_msg, write_msg, ControlMsg, StreamHeader,
@@ -173,6 +174,8 @@ pub(crate) struct Inner {
     next_id: AtomicU64,
     pub(crate) peer_bytes: Mutex<HashMap<NodeId, Arc<PeerBytes>>>,
     hostname: String,
+    /// Single-instance lock, released on shutdown. None for explicit-key nodes (tests).
+    instance: Mutex<Option<InstanceLock>>,
 }
 
 /// The remote closed our connection because it does not (yet) allow us.
@@ -306,15 +309,25 @@ impl Drop for TunnelConnGuard {
 
 impl Node {
     /// Load or create identity, bind iroh endpoint, start accept loop. Non-blocking.
+    /// Fails if another lanlink process already runs a node on this config dir.
     pub async fn start(config: Config) -> anyhow::Result<Node> {
+        let instance = InstanceLock::acquire(&Config::dir())?;
         let key = load_or_create_secret_key(&Config::dir().join("identity.key"))?;
-        Self::start_with_secret_key(config, key).await
+        Self::start_inner(config, key, Some(instance)).await
     }
 
     /// Like [`Node::start`] but with an explicit identity (does not touch the config dir).
     pub async fn start_with_secret_key(
         config: Config,
         secret_key: SecretKey,
+    ) -> anyhow::Result<Node> {
+        Self::start_inner(config, secret_key, None).await
+    }
+
+    async fn start_inner(
+        config: Config,
+        secret_key: SecretKey,
+        instance: Option<InstanceLock>,
     ) -> anyhow::Result<Node> {
         let lookup = MemoryLookup::new();
         let mut builder = Endpoint::builder(presets::N0)
@@ -353,6 +366,7 @@ impl Node {
             next_id: AtomicU64::new(1),
             peer_bytes: Mutex::new(HashMap::new()),
             hostname,
+            instance: Mutex::new(instance),
         });
         let node = Node { inner };
         let n = node.clone();
@@ -511,6 +525,7 @@ impl Node {
             }
         }
         self.inner.endpoint.close().await;
+        self.inner.instance.lock().unwrap().take();
         Ok(())
     }
 

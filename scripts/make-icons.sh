@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Regenerate assets/icon.{png,ico,icns} from assets/icon.svg.
+# Regenerate assets/icon.{png,ico,icns} from assets/icon.svg, and the tray icons
+# (assets/tray-template.png from assets/tray.svg for the macOS menu bar, assets/tray-color.png for Windows).
 # Needs: rsvg-convert (brew install librsvg), python3 (Pillow is installed into a temp venv), iconutil (macOS).
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -12,6 +13,8 @@ for s in 16 32 48 64 128 256 512 1024; do
   rsvg-convert -w "$s" -h "$s" assets/icon.svg -o "$tmp/$s.png"
 done
 cp "$tmp/512.png" assets/icon.png
+cp "$tmp/32.png" assets/tray-color.png
+rsvg-convert -w 36 -h 36 assets/tray.svg -o assets/tray-template.png
 
 python3 -m venv "$tmp/venv"
 "$tmp/venv/bin/pip" -q install pillow
@@ -35,4 +38,4 @@ if command -v iconutil >/dev/null; then
 else
   echo "iconutil not found; skipping icon.icns" >&2
 fi
-echo "wrote assets/icon.png assets/icon.ico assets/icon.icns"
+echo "wrote assets/icon.{png,ico,icns} assets/tray-{template,color}.png"

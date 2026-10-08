@@ -3,6 +3,7 @@
 use gpui::{div, prelude::*, px, ClipboardItem, Context};
 use lanlink_core::Config;
 
+use crate::lifecycle;
 use crate::state::{MenuKind, Root};
 use crate::views::peers::pane_header;
 use crate::widgets::*;
@@ -90,6 +91,37 @@ impl Root {
                     ),
             );
 
+        let background = group(&t)
+            .child(
+                group_row(&t, false)
+                    .child(title_sub(
+                        &t,
+                        "Keep running in the background when the window is closed",
+                        Some(format!(
+                            "lanlink stays in the {} so friends can still reach you",
+                            lifecycle::TRAY_PLACE
+                        )),
+                    ))
+                    .child(
+                        toggle(&t, "keep-in-background", self.prefs.keep_in_background).on_click(
+                            cx.listener(|this, _, _, cx| this.toggle_keep_in_background(cx)),
+                        ),
+                    ),
+            )
+            .child(
+                group_row(&t, true)
+                    .child(title_sub(
+                        &t,
+                        "Launch at login",
+                        Some(format!("Starts hidden in the {}", lifecycle::TRAY_PLACE)),
+                    ))
+                    .child(
+                        toggle(&t, "launch-at-login", self.prefs.launch_at_login).on_click(
+                            cx.listener(|this, _, _, cx| this.toggle_launch_at_login(cx)),
+                        ),
+                    ),
+            );
+
         let appearance = group(&t)
             .child(
                 group_row(&t, false)
@@ -158,6 +190,8 @@ impl Root {
             .child(identity)
             .child(glabel(&t, "Network"))
             .child(network)
+            .child(glabel(&t, "Background"))
+            .child(background)
             .child(glabel(&t, "Appearance"))
             .child(appearance)
             .child(glabel(&t, "Files"))
