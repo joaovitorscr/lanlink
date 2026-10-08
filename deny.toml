@@ -1,0 +1,5 @@
+# cargo deny check advisories (CI). Vulnerabilities fail the build; "unmaintained"
+# notices only count for crates we depend on directly, since transitive ones (gpui's font
+# stack, iroh internals) are out of our hands.
+[advisories]
+unmaintained = "workspace"

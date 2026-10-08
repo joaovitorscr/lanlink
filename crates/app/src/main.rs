@@ -9,6 +9,7 @@ mod state;
 mod theme;
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 mod tray;
+mod update;
 mod views;
 mod widgets;
 

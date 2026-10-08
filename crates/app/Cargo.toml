@@ -16,6 +16,11 @@ tracing.workspace = true
 open = "5"
 serde = { workspace = true }
 serde_json = { workspace = true }
+# Update check. rustls with ring (already linked by iroh), no OpenSSL or aws-lc.
+reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
+semver = "1"
+
 auto-launch = "0.6"
 
 # Tray / menu bar icon. Linux is not a GUI target (gpui shaders, no tray backend wired up).

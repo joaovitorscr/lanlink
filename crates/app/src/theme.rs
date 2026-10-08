@@ -42,6 +42,12 @@ pub struct Prefs {
     /// Start lanlink, hidden, when the user logs in.
     #[serde(default)]
     pub launch_at_login: bool,
+    /// Check GitHub for a newer release at startup and every few hours.
+    #[serde(default = "default_true")]
+    pub check_updates: bool,
+    /// Version whose update banner the user dismissed.
+    #[serde(default)]
+    pub dismissed_update: Option<String>,
 }
 
 fn default_true() -> bool {
@@ -62,6 +68,8 @@ impl Prefs {
                 transparency: true,
                 keep_in_background: true,
                 launch_at_login: false,
+                check_updates: true,
+                dismissed_update: None,
             })
     }
 

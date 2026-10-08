@@ -63,6 +63,7 @@ impl Render for Root {
                     .min_w_0()
                     .h_full()
                     .child(self.render_titlebar(&t, cx))
+                    .children(self.render_update_banner(&t, cx))
                     .child(
                         div()
                             .id(SharedString::from(format!("pane-{}", self.tab as u8)))
@@ -212,6 +213,53 @@ impl Root {
                 button(t, "add-peer", Some("plus"), "Add Peer", ButtonKind::Primary)
                     .on_click(cx.listener(|this, _, _, cx| this.open_sheet(Sheet::AddPeer, cx))),
             )
+    }
+
+    /// "lanlink X is available" strip above the pane, until dismissed for that version.
+    fn render_update_banner(
+        &mut self,
+        t: &Theme,
+        cx: &mut Context<Self>,
+    ) -> Option<impl IntoElement> {
+        let release = self.update_banner()?.clone();
+        Some(
+            div()
+                .flex_none()
+                .pl(px(SIDEBAR_W + 30.))
+                .pr_6()
+                .pb_2()
+                .child(
+                    row()
+                        .px_3p5()
+                        .py_2()
+                        .rounded(px(10.))
+                        .bg(t.blue.opacity(0.1))
+                        .border_1()
+                        .border_color(t.blue.opacity(0.3))
+                        .child(tile("refresh", t.blue, 24., t.white))
+                        .child(title_sub(
+                            t,
+                            format!("lanlink {} is available", release.version),
+                            Some(format!("You have {}", lanlink_core::build_info::VERSION)),
+                        ))
+                        .child(
+                            button(
+                                t,
+                                "update-download",
+                                None,
+                                "Open download page",
+                                ButtonKind::Primary,
+                            )
+                            .on_click(cx.listener(
+                                move |this, _, _, cx| this.open_url(release.url.clone(), cx),
+                            )),
+                        )
+                        .child(
+                            icon_button(t, "update-dismiss", "x")
+                                .on_click(cx.listener(|this, _, _, cx| this.dismiss_update(cx))),
+                        ),
+                ),
+        )
     }
 
     fn render_toast(&mut self, t: &Theme, cx: &mut Context<Self>) -> Option<impl IntoElement> {
