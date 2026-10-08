@@ -324,13 +324,24 @@ impl Node {
         .map(|_| ())
     }
 
-    /// Add someone to a network we own without an invite (e.g. "Move to").
+    /// Add a member of another network we own to `id` without an invite (used by
+    /// `move_member`). Anyone else needs an invite code: members only accept a network they
+    /// did not ask to join from an owner whose network they are already in.
     pub async fn add_member(
         &self,
         id: &str,
         peer: NodeId,
         name: Option<String>,
     ) -> anyhow::Result<()> {
+        let me = self.id();
+        let known = self
+            .networks()
+            .iter()
+            .any(|n| n.id != id && n.active() && n.is_owner(&me) && n.has_member(&peer));
+        anyhow::ensure!(
+            known,
+            "Only members of another network you own can be added directly. Send an invite code instead."
+        );
         let key = peer.to_string();
         self.edit_owned(id, &[], |n| {
             if !n.has_member(&peer) {
@@ -711,7 +722,15 @@ impl Node {
             .collect();
         let before = self.allowed_set();
         let mut resend_leave = Vec::new();
+        let mut refused = Vec::new();
         let res = self.edit_config_if(|c| {
+            // A network we did not ask to join is only taken from an owner whose network we
+            // are already in (a "Move to" between two of its networks). Otherwise any allowed
+            // peer could make up a network with us in it and make strangers allowed.
+            let trusted_owner = c
+                .networks
+                .iter()
+                .any(|n| n.owner == owner && n.active() && n.has_member(&me));
             let mut changed = false;
             for net in &networks {
                 let ours = net.has_member(&me);
@@ -729,10 +748,11 @@ impl Node {
                         drop_network(c, &net.id);
                         changed = true;
                     }
-                    None if ours => {
+                    None if ours && trusted_owner => {
                         c.networks.push(net.clone());
                         changed = true;
                     }
+                    None if ours => refused.push(net.id.clone()),
                     None => {}
                 }
             }
@@ -752,6 +772,9 @@ impl Node {
             }
             changed
         });
+        for id in refused {
+            tracing::info!(%from, network = %id, "ignoring a network we did not ask to join");
+        }
         match res {
             Ok(true) => {
                 tracing::info!(%from, "networks updated by their owner");
@@ -935,5 +958,71 @@ impl Node {
             return Join::Rejected("The owner could not save your request. Try again.".into());
         }
         out
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::SecretKey;
+
+    fn with_member(mut n: Network, id: NodeId) -> Network {
+        n.members.push(Member {
+            id: id.to_string(),
+            name: String::new(),
+            joined_at: 0,
+        });
+        n
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn unsolicited_network_is_ignored() -> anyhow::Result<()> {
+        // edit_config saves; keep it away from the user's real config.
+        let dir = std::env::temp_dir().join(format!("lanlink-test-{}", std::process::id()));
+        std::env::set_var("LANLINK_CONFIG_DIR", &dir);
+        let friend = SecretKey::generate().public();
+        let stranger = SecretKey::generate().public();
+        let config = Config {
+            allowed_peers: vec![friend.to_string()],
+            disable_lan_detection: true,
+            ..Default::default()
+        };
+        let node = Node::start_with_secret_key(config, SecretKey::generate()).await?;
+        let me = node.id();
+
+        // A direct peer makes up a network with us and a stranger in it: ignored.
+        let fake = with_member(with_member(Network::new("Fake", friend, "f"), me), stranger);
+        node.apply_network_state(friend, fake.clone());
+        node.apply_network_sync(friend, vec![fake]);
+        assert!(node.networks().is_empty());
+        assert!(!node.is_allowed(&stranger));
+        assert!(!node.dial_set().contains(&stranger));
+
+        // Once we are in one of its networks, the same owner may add us to another one
+        // ("Move to").
+        let crew = with_member(Network::new("Crew", friend, "f"), me);
+        node.edit_config(|c| c.networks.push(crew))?;
+        let other = with_member(
+            with_member(Network::new("Other", friend, "f"), me),
+            stranger,
+        );
+        node.apply_network_state(friend, other.clone());
+        assert!(node.networks().iter().any(|n| n.id == other.id));
+        assert!(node.is_allowed(&stranger));
+
+        // Someone else claiming to own it is ignored.
+        let mut hijack = other.clone();
+        hijack.owner = stranger.to_string();
+        hijack.name = "Mine now".into();
+        node.apply_network_state(stranger, hijack);
+        let n = node
+            .networks()
+            .into_iter()
+            .find(|n| n.id == other.id)
+            .unwrap();
+        assert_eq!(n.owner, friend.to_string());
+
+        node.shutdown().await?;
+        Ok(())
     }
 }

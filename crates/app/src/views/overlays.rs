@@ -742,18 +742,6 @@ impl Root {
         let items: Vec<MenuItem> = match menu.kind.clone() {
             MenuKind::Peer(id) => {
                 let mut items = peer_items(id);
-                let owned = self.owned_networks(None);
-                if !owned.is_empty() {
-                    items.push(MenuItem::Sep);
-                    items.push(MenuItem::Header("Add to network".into()));
-                    for net in owned {
-                        let name = self.peer_name(id);
-                        items.push(MenuItem::action("users", net.name.clone(), move |r, _| {
-                            let (net, name) = (net.id.clone(), name.clone());
-                            r.run(move |n| async move { n.add_member(&net, id, Some(name)).await })
-                        }));
-                    }
-                }
                 items.push(MenuItem::Sep);
                 items.push(MenuItem::danger("trash", "Remove…", move |r, cx| {
                     r.open_sheet(Sheet::RemovePeer(id), cx)
