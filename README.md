@@ -18,7 +18,9 @@ Connections are end-to-end encrypted. Only people you've allowed can connect. Wh
    - click **Share** next to the Minecraft world that lanlink detected, or
    - add Minecraft as a service by hand, with the port Minecraft printed in chat.
 
-Keep lanlink open while you play. `lanlink-cli.exe` in the same zip is a command-line version. You don't need it.
+Keep lanlink running while you play. Closing the window doesn't quit it: lanlink stays in the notification area (the icons next to the clock; check the **^** overflow arrow), and your friend stays connected. Click the lanlink icon to bring the window back, or right-click it and choose **Quit lanlink** to stop. You can change this in Settings.
+
+`lanlink-cli.exe` in the same zip is a command-line version. You don't need it, and it can't run while the app is open: both use the same identity, so the second one stops with "lanlink is already running".
 
 ## For the player
 
@@ -28,14 +30,22 @@ Keep lanlink open while you play. `lanlink-cli.exe` in the same zip is a command
 4. Open the **Tunnels** tab. It shows a local address such as `127.0.0.1:25565` for each game your friend shares.
 5. In Minecraft, go to *Multiplayer → Direct Connection* and enter that address.
 
+The tunnel only works while lanlink is running. Closing the window keeps it running in the notification area on Windows or the menu bar on macOS. Use **Quit lanlink** from that icon's menu when you're done.
+
 ## Settings
 
-The **Settings** tab lets you change your display name and the relay server, and has a button that opens the logs folder.
+The **Settings** tab lets you change your display name and the relay server, and has a button that opens the logs folder. Under **Background**:
+
+- **Keep running in the background when the window is closed** (on by default). Closing the window hides it and lanlink keeps running in the notification area (Windows) or menu bar (macOS). The icon's menu shows how many peers are connected, and has **Show lanlink** and **Quit lanlink**. On macOS, clicking lanlink in the Dock also brings the window back. Turn this off to make closing the window quit lanlink.
+- **Launch at login** (off by default). Starts lanlink hidden in the notification area or menu bar when you log in. On Windows this adds lanlink to your user's startup programs; on macOS it adds a LaunchAgent (`~/Library/LaunchAgents/lanlink.plist`). If you move `lanlink.exe` or the app, open lanlink once so the login item follows it.
+
+Quitting tells your peers right away that you left, instead of them seeing you as connected for another ~30 seconds.
 
 ## Troubleshooting
 
 - **Relayed vs Direct.** The Peers tab shows how you're connected. *Direct* is the best case. *Relayed* means traffic goes through the relay server (common when one side is behind CGNAT, as with many mobile and some home ISPs). Relayed still works but adds some latency.
 - **Can connect but the game says nothing is listening.** The host's game isn't open on the shared port. Check that the world is opened to LAN and that the port in the Hosting tab matches the one Minecraft shows. Minecraft picks a new port each time you open to LAN, so share it again after restarting.
+- **"lanlink is already running (pid N)".** Only one lanlink can run at a time per user, because the app and `lanlink-cli` share one identity. Quit the other copy first (check the notification area or menu bar for the lanlink icon). `lanlink id` still works while the app runs.
 - **Friend never sees the request.** Double-check that the whole ID was copied, that both apps are running, and that the firewall prompt was allowed.
 - **Logs.** When asking for help, send the latest log file:
   - Windows: `%APPDATA%\lanlink\logs` (paste into the Explorer address bar)

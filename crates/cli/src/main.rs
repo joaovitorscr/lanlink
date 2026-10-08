@@ -2,7 +2,11 @@ use anyhow::Context;
 use clap::{Parser, Subcommand};
 use lanlink_core::{Config, ConnState, Node, NodeEvent, NodeId, PeerInfo, Protocol, Service};
 use std::net::SocketAddr;
+use std::time::Duration;
 use tokio::sync::broadcast::error::RecvError;
+
+/// How long to wait for peers to be told we are leaving before exiting anyway.
+const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(2);
 
 #[derive(Parser)]
 #[command(
@@ -142,7 +146,7 @@ async fn main() -> anyhow::Result<()> {
                     println!("{}  {}", r.id, r.name.as_deref().unwrap_or("-"));
                 }
             }
-            node.shutdown().await?;
+            shutdown(node).await?;
         }
         Cmd::Host { name, port, udp } => {
             let protocol = if udp { Protocol::Udp } else { Protocol::Tcp };
@@ -150,13 +154,14 @@ async fn main() -> anyhow::Result<()> {
             config
                 .services
                 .push(Service::new(name.clone(), protocol, port));
+            // Start first: if the app is already running, leave its config alone.
+            let node = Node::start(config.clone()).await?;
             config.save()?;
-            let node = Node::start(config).await?;
             println!("node id: {}", node.id());
             println!("hosting {name} ({protocol:?}) on local port {port}; ctrl-c to stop");
             let mut events = node.subscribe();
             run_until_ctrl_c(&mut events, |ev| print_event(&ev)).await;
-            node.shutdown().await?;
+            shutdown(node).await?;
         }
         Cmd::Connect {
             node_id,
@@ -186,7 +191,7 @@ async fn main() -> anyhow::Result<()> {
                 other => print_event(&other),
             })
             .await;
-            node.shutdown().await?;
+            shutdown(node).await?;
         }
     }
     Ok(())
@@ -196,14 +201,43 @@ async fn run_until_ctrl_c(
     events: &mut tokio::sync::broadcast::Receiver<NodeEvent>,
     mut on_event: impl FnMut(NodeEvent),
 ) {
+    let stop = stop_signal();
+    tokio::pin!(stop);
     loop {
         tokio::select! {
-            _ = tokio::signal::ctrl_c() => break,
+            _ = &mut stop => break,
             ev = events.recv() => match ev {
                 Ok(ev) => on_event(ev),
                 Err(RecvError::Lagged(_)) => continue,
                 Err(RecvError::Closed) => break,
             },
+        }
+    }
+}
+
+/// Resolves on ctrl-c, or SIGTERM on Unix.
+async fn stop_signal() {
+    #[cfg(unix)]
+    {
+        use tokio::signal::unix::{signal, SignalKind};
+        if let Ok(mut term) = signal(SignalKind::terminate()) {
+            tokio::select! {
+                _ = tokio::signal::ctrl_c() => {}
+                _ = term.recv() => {}
+            }
+            return;
+        }
+    }
+    let _ = tokio::signal::ctrl_c().await;
+}
+
+/// Close connections so peers see us leave now, not after the idle timeout.
+async fn shutdown(node: Node) -> anyhow::Result<()> {
+    match tokio::time::timeout(SHUTDOWN_TIMEOUT, node.shutdown()).await {
+        Ok(res) => res,
+        Err(_) => {
+            tracing::warn!("shutdown timed out after {SHUTDOWN_TIMEOUT:?}");
+            Ok(())
         }
     }
 }

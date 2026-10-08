@@ -16,6 +16,7 @@ pub mod api;
 pub mod build_info;
 pub mod config;
 pub mod forward;
+pub mod instance;
 pub mod lan;
 pub mod node;
 pub mod protocol;

@@ -36,6 +36,12 @@ pub struct Prefs {
     /// Translucent window with blur / glass behind it. Off = opaque.
     #[serde(default = "default_true")]
     pub transparency: bool,
+    /// Closing the window hides it to the tray / menu bar and keeps the node running.
+    #[serde(default = "default_true")]
+    pub keep_in_background: bool,
+    /// Start lanlink, hidden, when the user logs in.
+    #[serde(default)]
+    pub launch_at_login: bool,
 }
 
 fn default_true() -> bool {
@@ -54,6 +60,8 @@ impl Prefs {
             .unwrap_or(Prefs {
                 appearance: Appearance::System,
                 transparency: true,
+                keep_in_background: true,
+                launch_at_login: false,
             })
     }
 
