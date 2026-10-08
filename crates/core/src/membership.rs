@@ -614,11 +614,6 @@ impl Node {
                 }
             });
         }
-        self.inner
-            .requests
-            .lock()
-            .unwrap()
-            .retain(|(r, _)| !after.contains(&r.id));
         self.sync_dialers();
         self.push_services();
         self.emit(NodeEvent::NetworksChanged);

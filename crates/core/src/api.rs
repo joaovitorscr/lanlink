@@ -13,8 +13,7 @@ use std::path::PathBuf;
 use std::sync::atomic::Ordering;
 use std::time::SystemTime;
 
-/// An unknown peer tried to connect to us, or someone used an "ask me" invite code to one
-/// of our networks.
+/// Someone used an "ask me" invite code to one of our networks.
 #[derive(Debug, Clone)]
 pub struct PeerRequest {
     pub id: NodeId,
@@ -22,7 +21,8 @@ pub struct PeerRequest {
     pub name: Option<String>,
     /// Most recent attempt.
     pub at: SystemTime,
-    /// Join request: id of the network they want to join. None for a connection request.
+    /// Id of the network they want to join. Always set; unknown peers that dial us directly
+    /// are turned away without a request.
     pub network: Option<String>,
 }
 
@@ -141,13 +141,11 @@ pub fn init_logging(prefix: &str) -> LogGuard {
     }
 }
 
-const REQUEST_TTL: std::time::Duration = std::time::Duration::from_secs(10 * 60);
-
 impl Node {
     // ---- peers ----
 
     /// Allow a peer, save its name, and start connecting (auto-reconnect keeps trying).
-    /// Also removes any pending request from it. Saves config.
+    /// Saves config.
     pub async fn add_peer(&self, id: NodeId, name: Option<String>) -> anyhow::Result<()> {
         let key = id.to_string();
         let name = name.filter(|n| !n.trim().is_empty());
@@ -163,13 +161,8 @@ impl Node {
         Ok(())
     }
 
-    /// Runtime side of allowing a peer: drop its request and start connecting.
+    /// Runtime side of allowing a peer: start connecting.
     fn activate_peer(&self, id: NodeId) {
-        self.inner
-            .requests
-            .lock()
-            .unwrap()
-            .retain(|(r, _)| r.id != id);
         self.update_peer(id, |_| {});
         self.start_dialer(id);
         self.wake_dialer(id);
@@ -196,11 +189,6 @@ impl Node {
         self.close_peer_tunnels(id);
         self.disconnect_peer(id);
         self.inner.peers.lock().unwrap().remove(&id);
-        self.inner
-            .requests
-            .lock()
-            .unwrap()
-            .retain(|(r, _)| r.id != id);
     }
 
     /// Set or clear the local display name for a peer. Saves config. Emits PeerStateChanged.
@@ -236,52 +224,26 @@ impl Node {
         }
     }
 
-    /// Join requests to our networks (oldest first, kept until answered), then unknown peers
-    /// that tried to connect recently (deduped by id, newest first, at most 20, entries
-    /// expire after 10 minutes).
+    /// Join requests to our networks, oldest first, kept until answered.
     pub fn pending_requests(&self) -> Vec<PeerRequest> {
-        let mut out = self.join_requests();
-        let mut reqs = self.inner.requests.lock().unwrap();
-        reqs.retain(|(_, at)| at.elapsed() < REQUEST_TTL);
-        out.extend(reqs.iter().map(|(r, _)| r.clone()));
-        out
+        self.join_requests()
     }
 
-    /// Allow = `add_peer(id, name)`. Deny = drop the request; it may come back if they retry.
-    /// For a peer with a join request this answers the join request instead
-    /// (see `respond_join`).
+    /// Answer the join request from this peer (see `respond_join`). No-op without one.
     pub async fn respond_request(
         &self,
         id: NodeId,
         allow: bool,
-        name: Option<String>,
+        _name: Option<String>,
     ) -> anyhow::Result<()> {
-        if let Some(network) = self
+        match self
             .join_requests()
             .into_iter()
             .find(|r| r.id == id)
             .and_then(|r| r.network)
         {
-            return self.respond_join(&network, id, allow).await;
-        }
-        if allow {
-            let name = name.or_else(|| {
-                self.inner
-                    .requests
-                    .lock()
-                    .unwrap()
-                    .iter()
-                    .find(|(r, _)| r.id == id)
-                    .and_then(|(r, _)| r.name.clone())
-            });
-            self.add_peer(id, name).await
-        } else {
-            self.inner
-                .requests
-                .lock()
-                .unwrap()
-                .retain(|(r, _)| r.id != id);
-            Ok(())
+            Some(network) => self.respond_join(&network, id, allow).await,
+            None => Ok(()),
         }
     }
 
