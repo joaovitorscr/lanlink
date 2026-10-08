@@ -2,19 +2,21 @@
 
 lanlink lets friends play LAN games like Minecraft over the internet as if they were on the same network. It is a small alternative to Radmin VPN or Hamachi with no account to create and no virtual network adapter to install. One person shares a game running on their computer, and the other gets a local address like `127.0.0.1:25565` on their own computer that leads straight to it.
 
-Connections are end-to-end encrypted, and only people you have allowed can connect to you. Traffic goes directly between the two computers when the network allows it, and through a relay server when it doesn't.
+Connections are end-to-end encrypted, and only people you have allowed or who are in one of your networks can connect to you. Traffic goes directly between the two computers when the network allows it, and through a relay server when it doesn't.
 
 ## Features
 
 - No account, no sign-up, no server to run. Your identity is a key pair created on first launch.
 - No virtual network adapter or driver. lanlink forwards individual ports, so it needs no admin rights.
-- Per-person allowlist. Nobody reaches your games until you click **Allow**.
+- Networks: create a group, send one invite code, and everyone in it can reach what the others share. You choose which networks see each service.
+- Per-person allowlist. Nobody outside your networks reaches your games until you click **Allow**.
 - TCP and UDP services, so it works for Minecraft Java and for games that use UDP.
 - Minecraft "Open to LAN" support. lanlink spots the world you opened, shares it with one click, and makes it show up in your friend's Multiplayer list.
 - Direct peer-to-peer connections with NAT hole punching, falling back to a relay. You can run your own relay.
 - Live connection info per friend: direct or relayed, latency, jitter and traffic.
 - Desktop app with a tray or menu bar icon, plus a command-line version for headless machines.
-- Built-in updates: lanlink tells you when a new release is out and can install it for you.
+- In-app updates: lanlink tells you when a new release is out and can download, verify and install it for you.
+- Config import and export, to move your peers, networks and services to another computer or back them up.
 
 ## Platform support
 
@@ -70,21 +72,21 @@ lanlink is built on [iroh](https://github.com/n0-computer/iroh), which connects 
 
 iroh first tries to set up a direct UDP path between the two computers, punching through NAT where possible. If that fails, traffic goes through a relay server over HTTPS. iroh keeps trying to upgrade a relayed connection to a direct one, which is why a friend can switch from Relayed to Direct after a few seconds. By default lanlink uses the public relays and address lookup run by n0, the team behind iroh. You can set your own relay in Settings.
 
-### The allowlist handshake
+### Handshake and allowlist
 
-Every connection starts with a handshake on the first QUIC stream. Both sides send a `Hello` with their display name and a `Services` message with the list of services they share.
+Every connection starts with a handshake on the first QUIC stream. Both sides send a `Hello` with their display name and a `Services` message with the services the other side may use.
 
-When a connection arrives from an ID that isn't on your allowlist, lanlink reads only its `Hello` to learn the name, closes the connection, and shows a request with **Allow** and **Ignore** buttons. The unknown peer never sees your services and can't open streams to them. Requests are kept for 10 minutes, at most 20 at a time.
+When a connection arrives from an ID that isn't on your allowlist or in one of your networks, lanlink reads only its `Hello` to learn the name, closes the connection, and shows a request with **Allow** and **Ignore** buttons. The unknown peer never sees your services and can't open streams to them. Requests are kept for 10 minutes, at most 20 at a time.
 
 Allowing a peer adds their ID to `allowed_peers` in your config. Members of a network you are in are allowed too, without being added to that list. lanlink connects to every allowed peer in the background and reconnects with backoff (2 to 30 seconds) when a connection drops or the network changes.
 
 Each side only sends the services the other may see. A service shared with everyone goes to direct peers and to members of all your networks. A service shared with some networks goes only to members of those networks.
 
-### Networks
+### Networks and invite codes
 
 A network has an owner, and the owner's computer holds the member list. There is no directory server. Members keep a copy in their config so the list shows while the owner is offline, but they only accept changes that come from the owner.
 
-An invite code is `lanlink-` followed by base32 of the owner's ID, the network ID, a random 80-bit token and a checksum. The joiner dials the owner and sends `JoinRequest` as its first message. This is the one message lanlink reads from a peer that isn't allowed yet. The owner checks the token and answers `JoinResponse`. With *Ask me first* the answer is "pending", and when the owner approves, their computer connects to the joiner to let them in. Every change to the member list is pushed to the members, who connect to new members and drop the ones that were removed.
+An invite code is `lanlink-` followed by base32 of the owner's ID, the network ID, a random 80-bit token and a checksum. The joiner dials the owner and sends `JoinRequest` as its first message, instead of `Hello`. Apart from the `Hello` of a connection request, this is the only message lanlink reads from a peer that isn't allowed yet. The owner checks the token and answers `JoinResponse`, then closes the connection. With an invite set to *Ask me first* the answer is "pending", and when the owner approves, their computer connects to the joiner to let them in. Every change to the member list is pushed to the members, who connect to new members and drop the ones that were removed.
 
 ### Control protocol
 
@@ -93,7 +95,7 @@ The first stream of each connection stays open as a control channel. Messages ar
 | Message | Purpose |
 |---|---|
 | `Hello` | Display name, sent first. |
-| `Services` | Your shared services: name, protocol, port and options. Sent again whenever the list changes. |
+| `Services` | The services the receiver may use: name, protocol, port and options. Sent again whenever the list changes. |
 | `Ping`, `Pong` | Sent every second by the side that dialed. The round trip gives the latency and jitter shown in the app. |
 | `JoinRequest`, `JoinResponse` | Joining a network with an invite code: the joiner's first message, and the owner's answer (approved, pending or rejected). The connection then closes. |
 | `NetworkState` | Owner to members: the current name and member list of one network, after every change. A member that is no longer listed drops the network. |
@@ -126,14 +128,15 @@ Everything lives in one folder per user:
 |---|---|
 | Windows | `%APPDATA%\lanlink` |
 | macOS | `~/Library/Application Support/lanlink` |
-| Linux | `~/.config/lanlink` |
+| Linux | `$XDG_CONFIG_HOME/lanlink`, usually `~/.config/lanlink` |
 
 Set the `LANLINK_CONFIG_DIR` environment variable to use a different folder, for example to run a second instance for testing.
 
 | File | Contents |
 |---|---|
 | `identity.key` | Your 32-byte secret key. Anyone with this file can act as you. |
-| `config.json` | Allowed peers and their names, shared services, saved tunnels, relay URL, display name and network options. Shared by the app and the CLI. |
+| `config.json` | Allowed peers and their names, networks, shared services, saved tunnels, relay URL, display name and network options. Shared by the app and the CLI. |
+| `config.json.bak` | The previous config, written before an import. |
 | `app.json` | Desktop app preferences: background mode, launch at login, theme, update check. |
 | `lanlink.lock`, `lanlink.pid` | Single-instance lock while lanlink runs. |
 | `logs/` | Daily log files (`app.*.log`, `cli.*.log`), 7 kept, plus `latency.*.csv` when latency logging is on. |
@@ -176,38 +179,52 @@ After the first launch it opens normally.
 
 ## Using lanlink
 
-The app has four tabs. **Networks** holds your networks, friends you added directly, and your ID. **Hosting** lists what you share. **Tunnels** lists what your friends share with you. **Settings** has everything else.
+The app has four tabs. **Networks** lists your networks, the friends you added directly, and your ID. **Hosting** lists what you share. **Tunnels** lists what your friends share with you. **Settings** has everything else.
 
-There are two ways to play with friends. A [network](#networks-1) is a group: one invite code and everyone in it can reach what the others share. Or add a friend directly by ID, which works in both directions: each person adds the other, or allows the other when a request comes in.
+There are two ways to connect with friends:
+
+- **A network.** One person creates it and sends an invite code. Everyone who joins can reach what the others share. This is the usual way, and the easiest for a group.
+- **A direct peer.** Two people add each other by ID. It works in both directions: each person adds the other, or clicks **Allow** when the other's request comes in.
 
 ### Hosting a game
 
-1. Open lanlink. Either create a network (**New Network**) and send your friend its invite code, or click **Copy my ID** and send them your ID (Discord, WhatsApp, anything).
-2. When your friend joins or adds you, a request with their name may appear in the Networks tab. Click **Allow**.
+1. Open lanlink and click **New Network**. Give it a name, choose who can join, and click **Create**. Copy the invite code lanlink shows and send it to your friends (Discord, WhatsApp, anything).
+2. If you chose *Only people I approve*, a request "*name* wants to join *network*" appears in the Networks tab when a friend uses the code. Click **Allow**.
 3. Start Minecraft and open your world to LAN (Esc > *Open to LAN*).
 4. Open the **Hosting** tab. Under **Detected**, click **Share** next to your world.
 
 For other games, or if detection doesn't see your world, click **Add service** and enter a name, the port the game listens on, and TCP or UDP. Tick **Minecraft world or server** for Minecraft so lanlink keeps following the world's port. Leave **Address** empty unless the game only listens on a specific address, such as a LAN IP or `::1`.
 
+A new service is shared with *Everyone I'm connected to*: your direct peers and the members of all your networks. To limit it, open the service's menu in Hosting and pick networks under *Share with*. The same menu has **Pause sharing** and **Stop sharing…**.
+
 The Hosting tab warns "Nothing is listening on this port" when the game isn't running on the shared TCP port. UDP ports can't be checked this way.
 
 ### Joining a game
 
-1. Open lanlink. With an invite code, click **Join Network** and paste it. With your friend's ID, click **Add peer** under *Direct peers*, paste it, and click **Add**.
-2. Wait for your friend to click **Allow**. The Networks tab shows **Connecting**, then **Direct** or **Relayed**. If the connection drops, click **Reconnect**.
-3. Open the **Tunnels** tab. Shared games are listed under the network, or under your friend's name for direct peers. Click **Connect**.
-4. lanlink opens a local address such as `127.0.0.1:25565` and shows it next to the game. It uses the same port as on your friend's computer when that port is free on yours, and a random free port otherwise.
-5. In Minecraft, the world shows up in *Multiplayer* as "<friend> - <game> (lanlink)". You can also use *Direct Connection* with the address from the Tunnels tab.
+1. Open lanlink, click **Join Network**, paste the invite code, and click **Join**.
+2. If the owner has to approve you, the network shows "Waiting for *owner* to approve you". Once they click **Allow**, lanlink lets you in by itself. Their computer connects to yours, so you don't need to do anything else.
+3. The Networks tab shows each member as **Connecting**, then **Direct** or **Relayed**.
+4. Open the **Tunnels** tab. Shared games are listed under the network. Click **Connect**.
+5. lanlink opens a local address such as `127.0.0.1:25565` and shows it next to the game. It uses the same port as on your friend's computer when that port is free on yours, and a random free port otherwise.
+6. In Minecraft, the world shows up in *Multiplayer* as "*friend* - *game* (lanlink)". You can also use *Direct Connection* with the address from the Tunnels tab.
 
 Connected tunnels are remembered and reopen the next time lanlink starts. Use the toggle next to a tunnel to turn that off, or the **x** to close it.
 
 ### Networks
 
-- **Create:** click **New Network**, pick a name and color, and choose who can join: anyone with the code, only people you approve, or nobody by code. lanlink then shows the invite code.
-- **Invite:** click **Invite code** on the network (or **Invite a friend…**), copy the code and send it. In the same sheet you can set when the code expires, switch between *Ask me first* and *Auto-approve*, make a new code, or revoke it.
-- **Join:** click **Join Network** and paste the code. With *Ask me first* the owner sees "*name* wants to join *network*" and clicks **Allow**, and you're let in automatically.
-- **Choose who sees a service:** in **Hosting**, open the service's **⋯** menu and pick networks under *Share with*. *Everyone I'm connected to* is the default.
-- **Manage:** the owner can rename the network, remove members, move them to another network they own, or delete it. Members can leave. Removed members lose access right away and their tunnels close.
+- **Create.** Click **New Network** and pick a name, a color and who can join: *Anyone with the code*, *Only people I approve*, or *Invite only, no code*. You can also set when the code expires, and whether members may share services with the network and pass the invite code on.
+- **Invite.** Choose **Invite code…** from the network's menu, or click **Invite a friend…** on the network. Copy the code and send it. As the owner you can change when it expires (never, after some hours, or after one use), switch between *Ask me first* and *Auto-approve*, make a **New code**, or **Revoke code**.
+- **Manage.** The owner can rename the network, remove members, move them to another network they own, or delete it. Members can leave. A removed member loses access right away and their tunnels close.
+
+The owner's computer holds the member list. Members can reach each other while the owner is offline, but nobody can join, and changes such as removals reach a member the next time they connect to the owner.
+
+### Adding a friend by ID
+
+1. One of you clicks **Copy my ID** (or **Copy** next to *Your ID* in the Networks tab) and sends it.
+2. The other clicks **Add peer** under *Direct peers*, pastes the ID, optionally gives a name, and clicks **Add**.
+3. The first person sees a request with the other's name and clicks **Allow**. If the connection drops, click **Reconnect**.
+
+Their shared games then show in the Tunnels tab under "Direct · from *name*".
 
 ### Background and tray
 
@@ -217,7 +234,7 @@ Click the icon or choose **Show lanlink** from its menu to bring the window back
 
 Quitting tells your peers right away that you left, instead of them seeing you as connected for another 30 seconds or so.
 
-Only one copy of lanlink can run at a time per user, because the app and the command-line version share one identity. Starting a second one stops with "lanlink is already running".
+Only one copy of lanlink can be online at a time per user, because the app and the command-line version share one identity. Starting a second one stops with "lanlink is already running". See [Command line](#command-line) for which CLI commands are safe while the app runs.
 
 ## Settings
 
@@ -228,17 +245,20 @@ The **Settings** tab has these sections:
 | Identity | Your display name, which peers see. Your ID, with a Copy button. |
 | Network | The relay server (empty means the public relays; restart lanlink after changing it). **Detect Minecraft LAN worlds**. **Log latency**, which writes every ping to a daily CSV in the logs folder and keeps the last 7 days. |
 | Background | **Keep running in the background when the window is closed** (on by default). **Launch at login** (off by default). |
-| Appearance | Light, dark or system theme. Window transparency. |
-| Updates | Turn the update check on or off, **Install updates automatically**, and **Check now**. |
+| Appearance | Light, dark or system theme. **Transparency**, which blurs the desktop behind the window. |
+| Updates | **Check for updates** on or off, **Install updates automatically**, and **Check now**. |
+| Import and export | **Export…** and **Import…** for your config file. See [Import and export](#import-and-export). |
 | Files | **Open** buttons for the logs folder and the config folder. |
 
 **Launch at login** starts lanlink hidden in the notification area or menu bar when you log in. On Windows it adds lanlink to your user's startup programs (the per-user Run key). On macOS it adds a LaunchAgent at `~/Library/LaunchAgents/lanlink.plist`. If you move `lanlink.exe` or the app, open lanlink once so the login item follows it.
 
-**Updates.** Stable and nightly builds check GitHub about 10 seconds after starting and then every 6 hours. Stable builds look for a newer stable release, nightly builds for a newer nightly. When one is out, a banner at the top of the window offers **Install update**: lanlink downloads the installer (Windows) or disk image (macOS) for your computer, checks it against the release's `SHA256SUMS`, then quits, installs it and starts again. With **Install updates automatically** on, the download happens in the background and the banner shows **Restart to update**; nothing installs until you click it. The portable Windows zip, and a macOS app run from the disk image instead of Applications, can't update themselves, so the banner links to the release page instead. Builds you compile yourself report the `dev` channel and never check.
+**Updates.** Stable and nightly builds check GitHub about 10 seconds after starting and then every 6 hours. Stable builds look for a newer stable release, nightly builds for a newer nightly. When one is out, a banner at the top of the window offers **Install update**: lanlink downloads the installer (Windows) or disk image (macOS) for your computer, checks it against the release's `SHA256SUMS`, then quits, installs it and starts again. With **Install updates automatically** on, the download happens in the background and the banner shows **Restart to update**; nothing installs until you click it. The portable Windows zip, and a macOS app run straight from the disk image, can't update themselves, so the banner offers **Download**, which opens the release page. Builds you compile yourself report the `dev` channel and never check.
 
 ### Import and export
 
-**Export config…** saves your peers and their names, shared services, saved tunnels and settings to a JSON file. Your identity key is not included, so importing the file elsewhere does not copy who you are. **Import config…** shows what a file contains, then either **merges** it into your config (the file wins where both have the same peer, service or tunnel) or **replaces** your config with it. The previous config is saved as `config.json.bak` in the config folder first. From a terminal, with lanlink closed: `lanlink config export [file]` and `lanlink config import <file> [--replace]`.
+**Export…** saves your whole config to a JSON file: peers and their names, networks, shared services, saved tunnels and settings. Your identity key is not included, so importing the file elsewhere does not copy who you are. **Import…** shows what a file contains, then either merges it into your config (the file wins where both have the same peer, network, service or tunnel) or replaces your config with it. The previous config is saved as `config.json.bak` in the config folder first.
+
+The same works from a terminal with `lanlink config export` and `lanlink config import`, see [Command line](#command-line).
 
 ## Troubleshooting
 
@@ -248,15 +268,15 @@ The **Settings** tab has these sections:
 
 **The world doesn't show up under Detected.** Check that **Detect Minecraft LAN worlds** is on in Settings, and that no other program has taken UDP port 4445. Adding the service by hand with **Add service** always works.
 
-**"lanlink is already running (pid N)".** Quit the other copy first. Look for the lanlink icon in the notification area or menu bar. `lanlink id` still works while the app runs.
+**"lanlink is already running (pid N)".** Quit the other copy first. Look for the lanlink icon in the notification area or menu bar. Only the read-only CLI commands (`id`, `peers`, `network list`, `config export`) are safe to run while the app runs.
 
-**Your friend never sees the request.** Check that the whole ID was copied, that both apps are running and show **Online** in the sidebar, and that the firewall prompt was allowed. Requests appear while lanlink is open and expire after 10 minutes.
+**Your friend never sees the request.** Check that the whole ID or invite code was copied, that both apps are running and show **Online** in the sidebar, and that the firewall prompt was allowed. Requests only arrive while lanlink is running, and connection requests from direct peers expire after 10 minutes.
 
 **Logs.** When asking for help, attach the latest log file from the logs folder. **Open** next to Logs in Settings opens it, or go there directly:
 
 - Windows: `%APPDATA%\lanlink\logs` (paste it into the Explorer address bar)
 - macOS: `~/Library/Application Support/lanlink/logs`
-- Linux: `~/.config/lanlink/logs`
+- Linux: `$XDG_CONFIG_HOME/lanlink/logs`, usually `~/.config/lanlink/logs`
 
 ## Security
 
@@ -265,12 +285,12 @@ What lanlink protects:
 - **Encryption.** All traffic between peers is end-to-end encrypted with QUIC and TLS 1.3, including traffic that goes through a relay.
 - **Identity.** Peers are identified by Ed25519 public keys and must prove they hold the matching private key, so nobody can pose as a friend without their `identity.key`.
 - **Access.** Only IDs on your allowlist and members of your networks can reach your shared services, and only the services shared with them. Unknown peers can send you a connection request with a name, or a join request with an invite code, nothing more. Only a network's owner can add members to it.
-- **Scope.** Only the ports you share are reachable, and only while sharing is on. Nothing else on your computer or network is exposed. Tunnels on the player's side listen on `127.0.0.1` only.
+- **Scope.** Only the ports you share are reachable, and only while sharing is on. Nothing else on your computer or network is exposed. On the player's side the app always opens tunnels on `127.0.0.1`, so only programs on that computer can use them. The CLI's `connect --local` flag takes any address, and an address such as `0.0.0.0:25565` exposes the tunnel to everyone on the player's LAN.
 - **Relays.** A relay forwards encrypted packets it can't read. It does see both IDs, both IP addresses, and how much traffic flows and when.
 
 What it doesn't protect:
 
-- **Allowed peers are trusted.** Anyone you allow can connect to every service you share, as if they were on your LAN. Remove peers you no longer play with.
+- **Allowed peers are trusted.** Anyone who can see a service can connect to it, as if they were on your LAN. A service shared with *Everyone I'm connected to* reaches your direct peers and all your network members. Remove peers and members you no longer play with.
 - **The shared game itself.** lanlink doesn't filter what goes through a tunnel. A vulnerable game server is just as vulnerable to an allowed friend.
 - **Your secret key.** `identity.key` is stored unencrypted. On macOS and Linux it is created readable only by you.
 - **Release binaries are unsigned.** Windows builds aren't code-signed and macOS builds are only ad-hoc signed, not notarized. Download only from this repository's Releases page. Updates are downloaded over HTTPS and only installed if they match the release's `SHA256SUMS`, which guards against corrupted downloads but not against a compromised release.
@@ -278,27 +298,52 @@ What it doesn't protect:
 
 ## Command line
 
-`lanlink` (`lanlink-cli.exe` in the Windows downloads) uses the same identity and config as the app, so it can't run at the same time as the app. It is mainly useful on headless machines, including Linux.
+`lanlink` (`lanlink-cli.exe` in the Windows downloads) uses the same identity and `config.json` as the app. It is mainly useful on headless machines, including Linux.
 
 ```sh
 lanlink id                                   # print your ID
+lanlink --version
+
+# Direct peers
 lanlink allow <id> --name ana                # allow a peer
-lanlink requests --secs 30                   # listen for connection requests
 lanlink accept <id> --name ana               # allow a peer that asked (same as allow)
+lanlink requests --secs 30                   # go online and list connection and join requests
 lanlink peers                                # list allowed peers
 lanlink rename <id> ana                      # change a peer's local name
 lanlink remove <id>                          # remove a peer and its saved tunnels
-lanlink host --name minecraft --port 25565   # share a local TCP port until Ctrl-C
+
+# Sharing and connecting
+lanlink host --name minecraft --port 25565   # share a local TCP port, stay online until Ctrl-C
 lanlink host --name game --port 7777 --udp   # share a UDP port
 lanlink connect <id> minecraft --local 127.0.0.1:25565   # forward a peer's service
+
+# Networks (a network is named by its name, ID, or a unique ID prefix)
 lanlink network create "Friday squad" --ask  # create a network, print its invite code
-lanlink network join <code>                  # join with an invite code
+lanlink network invite <network> --new       # print the invite code, or make a new one
+lanlink network join <code> --name ana       # join with an invite code
 lanlink network list                         # networks, members and codes
 lanlink network approve <network> <id>       # let in someone who asked to join
-lanlink --version
+lanlink network remove-member <network> <id>
+lanlink network leave <network>
+lanlink network delete <network>
+
+# Config
+lanlink config export lanlink-config.json    # write the config to a file (stdout if no file)
+lanlink config import lanlink-config.json    # merge a file into the config
+lanlink config import lanlink-config.json --replace
 ```
 
-`host` also takes `--host <address>` for services that listen on a LAN address or IPv6. `connect` picks a random local port when `--local` is left out. Run `lanlink <command> --help` for details.
+`network create` and `network invite` take `--ask` (owner approves each join) and `--expires never|once|<hours>h`, for example `--expires 24h`. `host` also takes `--host <address>` for services that listen on a LAN address or IPv6. `connect` picks a random local port when `--local` is left out. Run `lanlink <command> --help` for details.
+
+**Shared services stay shared.** `lanlink host` adds the service to `config.json` and doesn't remove it when you press Ctrl-C. It is shared again the next time the app or a node-starting CLI command runs. To stop sharing it, use **Stop sharing…** in the app's Hosting tab, or quit lanlink and delete the service from the `services` list in `config.json`.
+
+**Running the CLI next to the app.** Commands differ in how they touch the config:
+
+| Commands | Behavior while the app runs |
+|---|---|
+| `id`, `peers`, `network list`, `config export` | Read only. Safe to run at any time. |
+| `allow`, `accept`, `rename`, `remove` | Write `config.json` directly without going online. Run them with the app closed: a running app doesn't pick up the change and overwrites it the next time it saves. |
+| `host`, `connect`, `requests`, every other `network` command, `config import` | Go online as you or take the single-instance lock, so they stop with "lanlink is already running". Quit the app first. |
 
 ## Self-hosting a relay
 
