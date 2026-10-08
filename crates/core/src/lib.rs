@@ -1,7 +1,7 @@
 //! lanlink-core: peer-to-peer port forwarding over iroh (QUIC, TLS 1.3, hole punching + relay fallback).
 //!
-//! This file is the API CONTRACT shared by `cli` and `app`. Keep public signatures stable;
-//! implementers fill in the bodies in submodules.
+//! Used by both `cli` and `app`. [`Node`] (node.rs) runs the endpoint, connections and tunnels;
+//! api.rs adds the management calls the GUI uses; protocol.rs is the wire format.
 //!
 //! Model:
 //! - Every node has a persistent Ed25519 identity (`NodeId`), stored under the config dir.
@@ -31,7 +31,8 @@ pub use stats::LatencyStats;
 use std::net::SocketAddr;
 
 /// ALPN used for lanlink connections. Bump on incompatible protocol changes.
-pub const ALPN: &[u8] = b"lanlink/0";
+/// 1: control messages are tagged JSON objects (`{"type":"Ping","t":1}`).
+pub const ALPN: &[u8] = b"lanlink/1";
 
 /// A service a client is currently connected to: local listener -> remote peer service.
 #[derive(Debug, Clone)]

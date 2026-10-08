@@ -53,8 +53,17 @@ curl https://relay.example.com/ping
 
 ## Clients
 
-Each user sets the relay in their lanlink config:
+Each user sets the relay in the app: open the **Settings** tab, enter
+`https://relay.example.com` in **Relay server**, click **Save**, then restart lanlink.
 
-```toml
-relay_url = "https://relay.example.com"
+Without the app (e.g. on a headless machine running `lanlink-cli`), set `relay_url`
+in `config.json` in the lanlink config folder (`%APPDATA%\lanlink` on Windows,
+`~/Library/Application Support/lanlink` on macOS, `~/.config/lanlink` on Linux):
+
+```json
+{
+  "relay_url": "https://relay.example.com"
+}
 ```
+
+Keep the other keys in the file as they are.

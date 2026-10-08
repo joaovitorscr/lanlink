@@ -141,6 +141,7 @@ impl Root {
                 "Port",
                 div().w(px(110.)).flex().child(self.inputs.svc_port.clone()),
             ))
+            .child(self.frow(t, "Address", self.inputs.svc_host.clone()))
             .child(self.frow(
                 t,
                 "Protocol",

@@ -114,6 +114,7 @@ pub struct Inputs {
     pub peer_name: Entity<TextInput>,
     pub svc_name: Entity<TextInput>,
     pub svc_port: Entity<TextInput>,
+    pub svc_host: Entity<TextInput>,
     pub display_name: Entity<TextInput>,
     pub relay_url: Entity<TextInput>,
     pub rename: Entity<TextInput>,
@@ -193,6 +194,7 @@ impl Root {
             peer_name: input("Name (optional)", cx),
             svc_name: input("Name, e.g. minecraft", cx),
             svc_port: input("Port", cx),
+            svc_host: input("127.0.0.1 (optional)", cx),
             display_name: input("Your name", cx),
             relay_url: input("https://relay.example.com (empty = default)", cx),
             rename: input("Name", cx),
@@ -202,6 +204,7 @@ impl Root {
             submit(&inputs.peer_name, cx, Self::add_peer),
             submit(&inputs.svc_name, cx, Self::add_service),
             submit(&inputs.svc_port, cx, Self::add_service),
+            submit(&inputs.svc_host, cx, Self::add_service),
             submit(&inputs.display_name, cx, Self::save_display_name),
             submit(&inputs.relay_url, cx, Self::save_relay_url),
             submit(&inputs.rename, cx, Self::finish_rename),
@@ -595,9 +598,23 @@ impl Root {
             self.show_error("Give the service a name", cx);
             return;
         }
+        let host = self.inputs.svc_host.read(cx).text().trim().to_string();
+        let host = if host.is_empty() {
+            None
+        } else {
+            match host.trim_start_matches('[').trim_end_matches(']').parse() {
+                Ok(ip) => Some(ip),
+                Err(_) => {
+                    self.show_error("Address must be an IP, e.g. 192.168.1.20 or ::1", cx);
+                    return;
+                }
+            }
+        };
         self.inputs.svc_name.update(cx, |i, cx| i.take(cx));
         self.inputs.svc_port.update(cx, |i, cx| i.take(cx));
+        self.inputs.svc_host.update(cx, |i, cx| i.take(cx));
         let mut svc = Service::new(name, self.svc_protocol, port);
+        svc.host = host;
         svc.minecraft_lan = self.svc_minecraft;
         self.sheet = None;
         self.run(move |n| async move { n.add_service(svc).await });

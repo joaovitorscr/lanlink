@@ -1,7 +1,7 @@
 use anyhow::Context;
 use clap::{Parser, Subcommand};
 use lanlink_core::{Config, ConnState, Node, NodeEvent, NodeId, PeerInfo, Protocol, Service};
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 use tokio::sync::broadcast::error::RecvError;
 
 #[derive(Parser)]
@@ -28,6 +28,9 @@ enum Cmd {
         /// Forward UDP instead of TCP.
         #[arg(long)]
         udp: bool,
+        /// Address the service listens on, e.g. 192.168.1.20 or ::1. Default 127.0.0.1.
+        #[arg(long)]
+        host: Option<IpAddr>,
     },
     /// Allow a peer to connect to us.
     Allow {
@@ -144,16 +147,22 @@ async fn main() -> anyhow::Result<()> {
             }
             node.shutdown().await?;
         }
-        Cmd::Host { name, port, udp } => {
+        Cmd::Host {
+            name,
+            port,
+            udp,
+            host,
+        } => {
             let protocol = if udp { Protocol::Udp } else { Protocol::Tcp };
+            let mut svc = Service::new(name.clone(), protocol, port);
+            svc.host = host;
+            let addr = svc.local_addr(port);
             config.services.retain(|s| s.name != name);
-            config
-                .services
-                .push(Service::new(name.clone(), protocol, port));
+            config.services.push(svc);
             config.save()?;
             let node = Node::start(config).await?;
             println!("node id: {}", node.id());
-            println!("hosting {name} ({protocol:?}) on local port {port}; ctrl-c to stop");
+            println!("hosting {name} ({protocol:?}) at {addr}; ctrl-c to stop");
             let mut events = node.subscribe();
             run_until_ctrl_c(&mut events, |ev| print_event(&ev)).await;
             node.shutdown().await?;
