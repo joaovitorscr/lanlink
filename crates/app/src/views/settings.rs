@@ -74,7 +74,7 @@ impl Root {
                     ),
             )
             .child(
-                group_row(&t, true)
+                group_row(&t, false)
                     .child(title_sub(
                         &t,
                         "Detect Minecraft LAN worlds",
@@ -88,6 +88,20 @@ impl Root {
                             }),
                         ),
                     ),
+            )
+            .child(
+                group_row(&t, true)
+                    .child(title_sub(
+                        &t,
+                        "Log latency",
+                        Some("Writes every ping to a daily CSV in the logs folder (last 7 days)"),
+                    ))
+                    .child(toggle(&t, "latency-log", self.config.latency_log).on_click(
+                        cx.listener(|this, _, _, cx| {
+                            this.toggle_latency_log();
+                            cx.notify();
+                        }),
+                    )),
             );
 
         let appearance = group(&t)

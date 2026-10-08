@@ -43,12 +43,20 @@ fn default_true() -> bool {
     true
 }
 
+fn default_tcp() -> Protocol {
+    Protocol::Tcp
+}
+
 /// A client-side tunnel remembered across restarts.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SavedTunnel {
     /// Peer NodeId string.
     pub peer: String,
     pub service: String,
+    /// Protocol of the remote service, so the right socket is bound while the peer is offline.
+    /// Config files written before this field existed only had TCP tunnels.
+    #[serde(default = "default_tcp")]
+    pub protocol: Protocol,
     /// Local port to listen on (127.0.0.1). 0 is never saved; the chosen port is saved instead.
     pub local_port: u16,
     /// Open this tunnel automatically when the app starts. Default true.
@@ -78,6 +86,9 @@ pub struct Config {
     /// Turn off listening for Minecraft "Open to LAN" broadcasts on this machine.
     #[serde(default)]
     pub disable_lan_detection: bool,
+    /// Append every ping sample to daily `latency.<date>.csv` files in the logs dir (7 kept).
+    #[serde(default)]
+    pub latency_log: bool,
 }
 
 impl Config {

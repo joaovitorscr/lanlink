@@ -275,6 +275,22 @@ impl Node {
         Ok(changed)
     }
 
+    /// Turn Minecraft LAN world detection on or off. Saves config and starts or stops the
+    /// listener right away; turning it off clears `lan_worlds()`.
+    pub async fn set_lan_detection(&self, enabled: bool) -> anyhow::Result<()> {
+        self.edit_config(|c| c.disable_lan_detection = !enabled)?;
+        self.sync_lan_listener();
+        Ok(())
+    }
+
+    /// Turn the latency CSV log (daily files in `Config::logs_dir()`, 7 kept) on or off.
+    /// Saves config; takes effect with the next ping.
+    pub async fn set_latency_log(&self, enabled: bool) -> anyhow::Result<()> {
+        self.edit_config(|c| c.latency_log = enabled)?;
+        self.set_latency_logging(enabled);
+        Ok(())
+    }
+
     // ---- hosted services ----
 
     /// Add or replace (by name) a hosted service. Saves config and pushes the new service list
@@ -386,17 +402,25 @@ impl Node {
                 let local = SocketAddr::from((Ipv4Addr::LOCALHOST, local_port));
                 match self.ensure_conn(peer).await {
                     Ok((_, info)) => {
-                        self.open_tunnel_with(peer, service, local, Some(&info))
+                        self.open_tunnel_with(peer, service, local, Some(&info), Protocol::Tcp)
                             .await?
                     }
                     // Peer offline: bind now, dial lazily when something connects.
-                    Err(_) => self.open_tunnel_with(peer, service, local, None).await?,
+                    Err(_) => {
+                        let protocol = self.known_protocol(peer, service);
+                        self.open_tunnel_with(peer, service, local, None, protocol)
+                            .await?
+                    }
                 }
             }
         };
+        let protocol = self
+            .tunnel_protocol(&tunnel)
+            .unwrap_or_else(|| self.known_protocol(peer, service));
         let saved = SavedTunnel {
             peer: peer.to_string(),
             service: service.to_string(),
+            protocol,
             local_port: tunnel.local_addr.port(),
             auto_open,
         };
@@ -411,6 +435,32 @@ impl Node {
             }
         })?;
         Ok(tunnel)
+    }
+
+    /// Best guess of a service's protocol while its peer is offline: the saved tunnel's, else
+    /// the last service list the peer sent, else TCP.
+    fn known_protocol(&self, peer: NodeId, service: &str) -> Protocol {
+        let key = peer.to_string();
+        let saved = self
+            .inner
+            .config
+            .read()
+            .unwrap()
+            .saved_tunnels
+            .iter()
+            .find(|s| s.peer == key && s.service == service)
+            .map(|s| s.protocol);
+        saved
+            .or_else(|| {
+                self.inner.peers.lock().unwrap().get(&peer).and_then(|e| {
+                    e.info
+                        .services
+                        .iter()
+                        .find(|s| s.name == service)
+                        .map(|s| s.protocol)
+                })
+            })
+            .unwrap_or(Protocol::Tcp)
     }
 
     /// Forget a saved tunnel. Does not close it if open. Saves config.
