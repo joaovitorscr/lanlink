@@ -3,10 +3,11 @@ use std::future::Future;
 use std::net::{Ipv4Addr, TcpListener, UdpSocket};
 use std::time::{Duration, Instant};
 
-use gpui::{AppContext, Context, Entity, Pixels, Point, Subscription};
+use gpui::{AppContext, Context, Entity, PathPromptOptions, Pixels, Point, Subscription};
+use lanlink_core::export::{self, Import, ImportMode};
 use lanlink_core::{
-    ActiveTunnel, Config, LanWorld, NetworkStatus, Node, NodeEvent, NodeId, PeerInfo, PeerRequest,
-    Protocol, Service, ServiceStatus, TunnelInfo,
+    ActiveTunnel, Config, ImportOutcome, LanWorld, NetworkStatus, Node, NodeEvent, NodeId,
+    PeerInfo, PeerRequest, Protocol, Service, ServiceStatus, TunnelInfo,
 };
 use tokio::sync::{broadcast, mpsc};
 
@@ -27,6 +28,8 @@ pub enum Sheet {
     RenamePeer(NodeId),
     RemovePeer(NodeId),
     RemoveService(String),
+    /// Confirm the file in `Root::pending_import`.
+    Import,
 }
 
 /// Which popover menu is open.
@@ -53,6 +56,7 @@ pub enum Msg {
     Error(String),
     Info(String),
     RelaySaved(bool),
+    Imported(ImportOutcome),
     UpdateChecked(Result<Option<Release>, String>),
 }
 
@@ -79,6 +83,13 @@ pub struct Toast {
     pub text: String,
     pub error: bool,
     generation: u64,
+}
+
+/// A config file picked for import, waiting for confirmation.
+pub struct PendingImport {
+    pub file_name: String,
+    pub import: Import,
+    pub mode: ImportMode,
 }
 
 /// Previous byte counters of a tunnel, to show live up/down rates.
@@ -121,6 +132,7 @@ pub struct Root {
     pub svc_protocol: Protocol,
     pub svc_minecraft: bool,
     pub sheet: Option<Sheet>,
+    pub pending_import: Option<PendingImport>,
     pub menu: Option<OpenMenu>,
     pub prefs: Prefs,
     background: Option<gpui::WindowBackgroundAppearance>,
@@ -227,6 +239,7 @@ impl Root {
             svc_protocol: Protocol::Tcp,
             svc_minecraft: false,
             sheet: None,
+            pending_import: None,
             menu: None,
             prefs: Prefs::load(),
             background: None,
@@ -265,6 +278,22 @@ impl Root {
                 self.show_toast("Relay saved", false, cx);
                 self.resync();
             }
+            Msg::Imported(outcome) => {
+                self.restart_required |= outcome.restart_required;
+                self.resync();
+                self.fill_setting_inputs(cx);
+                let backup = outcome
+                    .backup
+                    .file_name()
+                    .map_or_else(String::new, |n| n.to_string_lossy().into_owned());
+                let mut text = format!(
+                    "Config imported. The previous one is saved as {backup} in the config folder."
+                );
+                if outcome.restart_required {
+                    text.push_str(" Restart lanlink to use the new relay.");
+                }
+                self.show_toast(text, false, cx);
+            }
             Msg::UpdateChecked(res) => {
                 self.update.checking = false;
                 self.update.last_check = Some(Instant::now());
@@ -301,6 +330,11 @@ impl Root {
         self.node = Some(node);
         self.resync();
         self.poll(cx);
+        self.fill_setting_inputs(cx);
+    }
+
+    /// Put the saved display name and relay into their Settings fields.
+    fn fill_setting_inputs(&mut self, cx: &mut Context<Self>) {
         let name = self.config.display_name.clone().unwrap_or_default();
         let relay = self.config.relay_url.clone().unwrap_or_default();
         self.inputs
@@ -506,6 +540,7 @@ impl Root {
 
     pub fn close_overlays(&mut self, cx: &mut Context<Self>) {
         self.sheet = None;
+        self.pending_import = None;
         self.menu = None;
         cx.notify();
     }
@@ -627,6 +662,103 @@ impl Root {
         let enabled = !self.config.latency_log;
         self.config.latency_log = enabled;
         self.run(move |n| async move { n.set_latency_log(enabled).await });
+    }
+
+    // ---- import and export ----
+
+    /// Ask where to save, then write the current config there.
+    pub fn export_config(&mut self, cx: &mut Context<Self>) {
+        let config = self
+            .node
+            .as_ref()
+            .map_or_else(|| self.config.clone(), |n| n.config());
+        let text = export::export(&config) + "\n";
+        let dir = dirs::document_dir()
+            .or_else(dirs::home_dir)
+            .unwrap_or_else(|| ".".into());
+        let rx = cx.prompt_for_new_path(&dir, Some(&export::default_file_name()));
+        cx.spawn(async move |this, cx| {
+            let path = match rx.await {
+                Ok(Ok(Some(path))) => path,
+                Ok(Ok(None)) | Err(_) => return,
+                Ok(Err(e)) => {
+                    let _ = this.update(cx, |s, cx| {
+                        s.show_error(format!("Could not open the save dialog: {e:#}"), cx)
+                    });
+                    return;
+                }
+            };
+            let res = std::fs::write(&path, text);
+            let _ = this.update(cx, |s, cx| match res {
+                Ok(()) => s.show_toast(format!("Config exported to {}", path.display()), false, cx),
+                Err(e) => s.show_error(format!("Could not write {}: {e}", path.display()), cx),
+            });
+        })
+        .detach();
+    }
+
+    /// Pick a file, check it, and open the confirmation sheet.
+    pub fn start_import(&mut self, cx: &mut Context<Self>) {
+        let rx = cx.prompt_for_paths(PathPromptOptions {
+            files: true,
+            directories: false,
+            multiple: false,
+            prompt: Some("Import".into()),
+        });
+        cx.spawn(async move |this, cx| {
+            let path = match rx.await {
+                Ok(Ok(Some(paths))) => match paths.into_iter().next() {
+                    Some(p) => p,
+                    None => return,
+                },
+                Ok(Ok(None)) | Err(_) => return,
+                Ok(Err(e)) => {
+                    let _ = this.update(cx, |s, cx| {
+                        s.show_error(format!("Could not open the file dialog: {e:#}"), cx)
+                    });
+                    return;
+                }
+            };
+            let file_name = path.file_name().map_or_else(
+                || path.display().to_string(),
+                |n| n.to_string_lossy().into_owned(),
+            );
+            let res = std::fs::read(&path)
+                .map_err(anyhow::Error::from)
+                .and_then(|bytes| export::parse(&bytes));
+            let _ = this.update(cx, |s, cx| match res {
+                Ok(import) => {
+                    s.pending_import = Some(PendingImport {
+                        file_name,
+                        import,
+                        mode: ImportMode::Merge,
+                    });
+                    s.open_sheet(Sheet::Import, cx);
+                }
+                Err(e) => s.show_error(format!("Can't import {file_name}: {e:#}"), cx),
+            });
+        })
+        .detach();
+    }
+
+    pub fn set_import_mode(&mut self, mode: ImportMode, cx: &mut Context<Self>) {
+        if let Some(p) = &mut self.pending_import {
+            p.mode = mode;
+        }
+        cx.notify();
+    }
+
+    /// Apply the confirmed import to the running node.
+    pub fn finish_import(&mut self, cx: &mut Context<Self>) {
+        self.sheet = None;
+        let Some(PendingImport { import, mode, .. }) = self.pending_import.take() else {
+            return;
+        };
+        self.run_then(
+            move |n| async move { n.apply_config(import.resolve(&n.config(), mode)).await },
+            Msg::Imported,
+        );
+        cx.notify();
     }
 
     // ---- updates ----

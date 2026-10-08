@@ -4,6 +4,7 @@ use gpui::{
     anchored, deferred, div, prelude::*, px, AnyElement, ClipboardItem, Context, Corner,
     FontWeight, MouseButton, SharedString, Window,
 };
+use lanlink_core::export::ImportMode;
 use lanlink_core::Protocol;
 
 use crate::state::{MenuKind, Root, Sheet};
@@ -21,6 +22,7 @@ impl Root {
             Sheet::RenamePeer(id) => self.sheet_rename(t, id, cx).into_any_element(),
             Sheet::RemovePeer(id) => self.sheet_remove_peer(t, id, cx).into_any_element(),
             Sheet::RemoveService(name) => self.sheet_remove_service(t, name, cx).into_any_element(),
+            Sheet::Import => self.sheet_import(t, cx)?.into_any_element(),
         };
         Some(
             deferred(
@@ -246,6 +248,61 @@ impl Root {
                     Box::new(move |r, cx| r.remove_service(n.clone(), cx)),
                 ),
             ))
+    }
+
+    fn sheet_import(&mut self, t: &Theme, cx: &mut Context<Self>) -> Option<impl IntoElement> {
+        let p = self.pending_import.as_ref()?;
+        let mut lede = format!("Contains {}.", p.import.summary().describe());
+        if let Some(v) = &p.import.app_version {
+            lede.push_str(&format!(" Exported by lanlink {v}"));
+            if let Some(at) = &p.import.exported_at {
+                lede.push_str(&format!(" on {}", at.get(..10).unwrap_or(at)));
+            }
+            lede.push('.');
+        }
+        let mode = p.mode;
+        let choice = |id: &'static str, m: ImportMode, label: &'static str, sub: &'static str| {
+            col()
+                .gap_0p5()
+                .child(
+                    checkbox(t, id, mode == m, label)
+                        .on_click(cx.listener(move |this, _, _, cx| this.set_import_mode(m, cx))),
+                )
+                .child(div().ml(px(23.)).child(small(t, sub)))
+        };
+        let (label, kind) = match mode {
+            ImportMode::Merge => ("Merge", ButtonKind::Primary),
+            ImportMode::Replace => ("Replace", ButtonKind::Danger),
+        };
+        Some(
+            col()
+                .child(self.sheet_head(t, &format!("Import {}?", p.file_name), &lede))
+                .child(
+                    col()
+                        .gap_2p5()
+                        .child(choice(
+                            "import-merge",
+                            ImportMode::Merge,
+                            "Merge with my config",
+                            "Adds its peers, services and tunnels. Where both have the same one, the file wins.",
+                        ))
+                        .child(choice(
+                            "import-replace",
+                            ImportMode::Replace,
+                            "Replace my config",
+                            "Peers, services and tunnels not in the file are removed.",
+                        )),
+                )
+                .child(div().mt_3().child(small(
+                    t,
+                    "Your current config is saved as config.json.bak first. Your identity is not part of the file and does not change.",
+                )))
+                .child(self.actions(
+                    t,
+                    cx,
+                    (label, kind, Box::new(|r, cx| r.finish_import(cx))),
+                )),
+        )
     }
 
     // ---- menus ----
