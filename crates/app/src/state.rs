@@ -549,10 +549,15 @@ impl Root {
     }
 
     pub fn toggle_lan_detection(&mut self) {
-        let mut config = self.config.clone();
-        config.disable_lan_detection = !config.disable_lan_detection;
-        self.config = config.clone();
-        self.run(move |n| async move { n.update_config(config).await });
+        let enabled = self.config.disable_lan_detection;
+        self.config.disable_lan_detection = !enabled;
+        self.run(move |n| async move { n.set_lan_detection(enabled).await });
+    }
+
+    pub fn toggle_latency_log(&mut self) {
+        let enabled = !self.config.latency_log;
+        self.config.latency_log = enabled;
+        self.run(move |n| async move { n.set_latency_log(enabled).await });
     }
 
     pub fn open_folder(&mut self, path: std::path::PathBuf, cx: &mut Context<Self>) {

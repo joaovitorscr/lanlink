@@ -6,7 +6,7 @@ use crate::protocol::{
 };
 use crate::stats::{LatencyLog, LatencyStats, LatencyWindow};
 use crate::NodeId;
-use crate::{ActiveTunnel, Config, Protocol, Service, ALPN};
+use crate::{ActiveTunnel, Config, Protocol, SavedTunnel, Service, ALPN};
 use anyhow::{bail, Context};
 use iroh::address_lookup::MemoryLookup;
 use iroh::endpoint::{presets, Connection, ConnectionError, RecvStream, SendStream};
@@ -153,7 +153,10 @@ pub(crate) struct SvcLive {
 pub(crate) struct Inner {
     pub(crate) endpoint: Endpoint,
     lookup: MemoryLookup,
+    /// Current config. Only read locks are held for long; writers go through `edit_config`.
     pub(crate) config: RwLock<Config>,
+    /// Serialises `edit_config` so concurrent edits never interleave or lose each other.
+    config_edit: Mutex<()>,
     events: broadcast::Sender<NodeEvent>,
     pub(crate) peers: Mutex<HashMap<NodeId, PeerEntry>>,
     pub(crate) tunnels: Mutex<Vec<TunnelEntry>>,
@@ -163,6 +166,8 @@ pub(crate) struct Inner {
     dialers: Mutex<HashMap<NodeId, (AbortHandle, Arc<Notify>)>>,
     epoch: Instant,
     latency_log: Mutex<LatencyLog>,
+    /// Minecraft LAN listener, running while LAN detection is enabled.
+    lan_task: Mutex<Option<AbortHandle>>,
     pub(crate) requests: Mutex<Vec<(PeerRequest, Instant)>>,
     request_seen: Mutex<HashMap<NodeId, Instant>>,
     pub(crate) network: Mutex<NetworkStatus>,
@@ -332,10 +337,12 @@ impl Node {
 
         let hostname = gethostname::gethostname().to_string_lossy().into_owned();
         let (events, _) = broadcast::channel(EVENT_CAPACITY);
+        let latency_log = LatencyLog::new(Config::logs_dir(), config.latency_log);
         let inner = Arc::new(Inner {
             endpoint,
             lookup,
             config: RwLock::new(config),
+            config_edit: Mutex::new(()),
             events,
             peers: Mutex::new(HashMap::new()),
             tunnels: Mutex::new(Vec::new()),
@@ -343,7 +350,8 @@ impl Node {
             dial_locks: Mutex::new(HashMap::new()),
             dialers: Mutex::new(HashMap::new()),
             epoch: Instant::now(),
-            latency_log: Mutex::new(LatencyLog::open(&Config::dir().join("latency.csv"))),
+            latency_log: Mutex::new(latency_log),
+            lan_task: Mutex::new(None),
             requests: Mutex::new(Vec::new()),
             request_seen: Mutex::new(HashMap::new()),
             network: Mutex::new(NetworkStatus::default()),
@@ -363,10 +371,7 @@ impl Node {
         node.spawn(async move { n.probe_loop().await });
         let n = node.clone();
         node.spawn(async move { n.announce_loop().await });
-        if !node.config().disable_lan_detection {
-            let n = node.clone();
-            node.spawn(async move { n.lan_listen_loop().await });
-        }
+        node.sync_lan_listener();
         node.sync_dialers();
         node.open_saved_tunnels().await;
         Ok(node)
@@ -395,23 +400,6 @@ impl Node {
 
     pub fn config(&self) -> Config {
         self.inner.config.read().unwrap().clone()
-    }
-
-    /// Persist and apply a new config (allowlist, services) at runtime.
-    pub async fn update_config(&self, config: Config) -> anyhow::Result<()> {
-        config.save()?;
-        let allowed = config.allowed_peers.clone();
-        *self.inner.config.write().unwrap() = config;
-        // Drop connections from peers that are no longer allowed.
-        let peers: Vec<NodeId> = self.inner.peers.lock().unwrap().keys().copied().collect();
-        for id in peers {
-            if !allowed.iter().any(|a| a == &id.to_string()) {
-                self.disconnect_peer(id);
-            }
-        }
-        self.sync_dialers();
-        self.push_services();
-        Ok(())
     }
 
     /// Subscribe to state changes for the UI.
@@ -459,7 +447,7 @@ impl Node {
         local: SocketAddr,
     ) -> anyhow::Result<ActiveTunnel> {
         let (_, info) = self.ensure_conn_reporting(peer).await?;
-        self.open_tunnel_with(peer, service, local, Some(&info))
+        self.open_tunnel_with(peer, service, local, Some(&info), Protocol::Tcp)
             .await
     }
 
@@ -498,6 +486,9 @@ impl Node {
             t.task.abort();
         }
         for t in self.inner.tasks.lock().unwrap().drain(..) {
+            t.abort();
+        }
+        if let Some(t) = self.inner.lan_task.lock().unwrap().take() {
             t.abort();
         }
         for s in self.inner.svc_live.lock().unwrap().values_mut() {
@@ -577,14 +568,46 @@ impl Node {
             .unwrap_or_else(|| self.inner.hostname.clone())
     }
 
-    /// Apply `f` to the config, save it, and store it.
+    /// Apply `f` to the config, save it, and store it. Nothing changes if saving fails.
+    /// The disk write happens outside the config lock so readers (the accept path, the UI)
+    /// never wait on it; `config_edit` keeps concurrent edits from interleaving.
     pub(crate) fn edit_config(&self, f: impl FnOnce(&mut Config)) -> anyhow::Result<()> {
-        let mut config = self.inner.config.write().unwrap();
-        let mut new = config.clone();
+        let _edit = self.inner.config_edit.lock().unwrap();
+        let mut new = self.inner.config.read().unwrap().clone();
         f(&mut new);
         new.save()?;
-        *config = new;
+        *self.inner.config.write().unwrap() = new;
         Ok(())
+    }
+
+    /// Start or stop the Minecraft LAN listener to match `disable_lan_detection`.
+    pub(crate) fn sync_lan_listener(&self) {
+        // Read the flag under the task lock so racing toggles settle on the latest value.
+        let mut task = self.inner.lan_task.lock().unwrap();
+        let enabled = !self.inner.config.read().unwrap().disable_lan_detection;
+        if enabled {
+            // A listener that failed to bind has finished; try again.
+            if task.as_ref().is_none_or(|t| t.is_finished()) {
+                let n = self.clone();
+                *task = Some(tokio::spawn(async move { n.lan_listen_loop().await }).abort_handle());
+            }
+        } else if let Some(t) = task.take() {
+            t.abort();
+            drop(task);
+            let had_worlds = {
+                let mut lan = self.inner.lan.lock().unwrap();
+                let had = !lan.is_empty();
+                lan.clear();
+                had
+            };
+            if had_worlds {
+                self.emit(NodeEvent::LanWorldsChanged(Vec::new()));
+            }
+        }
+    }
+
+    pub(crate) fn set_latency_logging(&self, enabled: bool) {
+        self.inner.latency_log.lock().unwrap().set_enabled(enabled);
     }
 
     pub(crate) fn peer_bytes(&self, id: NodeId) -> Arc<PeerBytes> {
@@ -650,7 +673,8 @@ impl Node {
         }
     }
 
-    /// Record one ping round trip: update rolling stats, emit a peer event, append to latency.csv.
+    /// Record one ping round trip: update rolling stats, emit a peer event, append to the
+    /// latency log if enabled.
     fn record_latency(&self, id: NodeId, rtt_ms: f32) {
         let mut snapshot = None;
         self.update_existing_peer(id, |e| {
@@ -781,13 +805,15 @@ impl Node {
     }
 
     /// Bind the local side of a tunnel. With `info` None (peer unreachable right now) the
-    /// service is assumed to be TCP and the peer is dialed lazily on the first local connection.
+    /// service is assumed to use `offline_protocol` and the peer is dialed lazily on the first
+    /// local connection (TCP) or packet (UDP).
     pub(crate) async fn open_tunnel_with(
         &self,
         peer: NodeId,
         service: &str,
         local: SocketAddr,
         info: Option<&PeerInfo>,
+        offline_protocol: Protocol,
     ) -> anyhow::Result<ActiveTunnel> {
         let svc = match info {
             Some(info) => info
@@ -796,7 +822,7 @@ impl Node {
                 .find(|s| s.name == service)
                 .cloned()
                 .with_context(|| format!("peer does not offer service {service:?}"))?,
-            None => Service::new(service, Protocol::Tcp, 0),
+            None => Service::new(service, offline_protocol, 0),
         };
         let live = Arc::new(TunnelLive::default());
 
@@ -865,18 +891,53 @@ impl Node {
                     .map(|(_, i)| i)
                     .filter(|i| i.services.iter().any(|s| s.name == st.service));
                 let local = SocketAddr::from((Ipv4Addr::LOCALHOST, st.local_port));
-                if let Err(e) = n
-                    .open_tunnel_with(peer, &st.service, local, info.as_ref())
+                match n
+                    .open_tunnel_with(peer, &st.service, local, info.as_ref(), st.protocol)
                     .await
                 {
-                    n.emit(NodeEvent::Error(format!(
+                    Ok(t) => n.correct_saved_protocol(&t),
+                    Err(e) => n.emit(NodeEvent::Error(format!(
                         "could not reopen {} on port {}: {e:#}",
                         st.service, st.local_port
-                    )));
+                    ))),
                 }
             });
         }
         while set.join_next().await.is_some() {}
+    }
+
+    /// Protocol of an open tunnel.
+    pub(crate) fn tunnel_protocol(&self, tunnel: &ActiveTunnel) -> Option<Protocol> {
+        self.inner
+            .tunnels
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|t| t.tunnel.local_addr == tunnel.local_addr && t.tunnel.peer == tunnel.peer)
+            .map(|t| t.protocol)
+    }
+
+    /// The peer told us the real protocol of a saved tunnel (e.g. a config from before
+    /// `SavedTunnel::protocol` existed); remember it for the next offline start.
+    fn correct_saved_protocol(&self, tunnel: &ActiveTunnel) {
+        let Some(protocol) = self.tunnel_protocol(tunnel) else {
+            return;
+        };
+        let key = tunnel.peer.to_string();
+        let stale = |s: &SavedTunnel| {
+            s.peer == key && s.service == tunnel.service && s.protocol != protocol
+        };
+        if !self.config().saved_tunnels.iter().any(stale) {
+            return;
+        }
+        let res = self.edit_config(|c| {
+            for s in c.saved_tunnels.iter_mut().filter(|s| stale(s)) {
+                s.protocol = protocol;
+            }
+        });
+        if let Err(e) = res {
+            tracing::warn!("saving tunnel protocol: {e:#}");
+        }
     }
 
     fn dial_lock(&self, peer: NodeId) -> Arc<tokio::sync::Mutex<()>> {
