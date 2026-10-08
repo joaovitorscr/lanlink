@@ -60,5 +60,9 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Clippy (app and CLI on Windows)
         run: cargo clippy --locked -p lanlink-app -p lanlink-cli --all-targets -- -D warnings
+      # The app's unit tests (update asset selection, checksums, install detection). The app
+      # doesn't build on Linux, so they run here.
+      - name: Test app
+        run: cargo test --locked -p lanlink-app
       - name: Test core
         run: cargo test --locked -p lanlink-core
