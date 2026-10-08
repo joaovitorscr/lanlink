@@ -55,6 +55,10 @@ Quitting tells your peers right away that you left, instead of them seeing you a
 
 Under **Updates**, lanlink checks GitHub for a newer release shortly after it starts and then every 6 hours. Stable builds look for the next stable release, nightly builds for the next nightly. When one is out, a banner at the top of the window links to its download page. You can turn the check off there, or click **Check now**. lanlink never downloads or installs anything by itself.
 
+### Import and export
+
+**Export config…** saves your peers and their names, shared services, saved tunnels and settings to a JSON file. Your identity key is not included, so importing the file elsewhere does not copy who you are. **Import config…** shows what a file contains, then either **merges** it into your config (the file wins where both have the same peer, service or tunnel) or **replaces** your config with it. The previous config is saved as `config.json.bak` in the config folder first. From a terminal, with lanlink closed: `lanlink config export [file]` and `lanlink config import <file> [--replace]`.
+
 ## Troubleshooting
 
 - **Relayed vs Direct.** The Peers tab shows how you're connected. *Direct* is the best case. *Relayed* means traffic goes through the relay server (common when one side is behind CGNAT, as with many mobile and some home ISPs). Relayed still works but adds some latency.
