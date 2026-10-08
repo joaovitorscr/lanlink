@@ -214,6 +214,10 @@ The **Settings** tab has these sections:
 
 **Updates.** Stable and nightly builds check GitHub about 10 seconds after starting and then every 6 hours. Stable builds look for a newer stable release, nightly builds for a newer nightly. When one is out, a banner at the top of the window offers **Install update**: lanlink downloads the installer (Windows) or disk image (macOS) for your computer, checks it against the release's `SHA256SUMS`, then quits, installs it and starts again. With **Install updates automatically** on, the download happens in the background and the banner shows **Restart to update**; nothing installs until you click it. The portable Windows zip, and a macOS app run from the disk image instead of Applications, can't update themselves, so the banner links to the release page instead. Builds you compile yourself report the `dev` channel and never check.
 
+### Import and export
+
+**Export config…** saves your peers and their names, shared services, saved tunnels and settings to a JSON file. Your identity key is not included, so importing the file elsewhere does not copy who you are. **Import config…** shows what a file contains, then either **merges** it into your config (the file wins where both have the same peer, service or tunnel) or **replaces** your config with it. The previous config is saved as `config.json.bak` in the config folder first. From a terminal, with lanlink closed: `lanlink config export [file]` and `lanlink config import <file> [--replace]`.
+
 ## Troubleshooting
 
 **Relayed instead of Direct.** The Peers tab shows how each friend is connected. Direct is the best case. Relayed means traffic goes through the relay server, which is common when one side is behind CGNAT (many mobile and some home ISPs). It still works but adds latency.

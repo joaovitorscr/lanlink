@@ -170,6 +170,32 @@ impl Root {
 
         let updates = self.render_updates(cx);
 
+        let transfer = group(&t)
+            .child(
+                group_row(&t, false)
+                    .child(title_sub(
+                        &t,
+                        "Export config",
+                        Some("Peers, services, saved tunnels and settings. Your identity key is not included."),
+                    ))
+                    .child(
+                        button(&t, "export-config", None, "Export…", ButtonKind::Secondary)
+                            .on_click(cx.listener(|this, _, _, cx| this.export_config(cx))),
+                    ),
+            )
+            .child(
+                group_row(&t, true)
+                    .child(title_sub(
+                        &t,
+                        "Import config",
+                        Some("Merge or replace with a file exported from lanlink"),
+                    ))
+                    .child(
+                        button(&t, "import-config", None, "Import…", ButtonKind::Secondary)
+                            .on_click(cx.listener(|this, _, _, cx| this.start_import(cx))),
+                    ),
+            );
+
         let files = group(&t)
             .child(
                 group_row(&t, false)
@@ -214,6 +240,8 @@ impl Root {
             .child(appearance)
             .child(glabel(&t, "Updates"))
             .child(updates)
+            .child(glabel(&t, "Import and export"))
+            .child(transfer)
             .child(glabel(&t, "Files"))
             .child(files)
     }

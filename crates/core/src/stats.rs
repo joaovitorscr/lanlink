@@ -187,7 +187,7 @@ fn prune_latency_files(dir: &Path, keep: usize) {
 }
 
 /// `YYYY-MM-DD` for a day count since 1970-01-01 (proleptic Gregorian, UTC).
-fn civil_date(day: u64) -> String {
+pub(crate) fn civil_date(day: u64) -> String {
     // Howard Hinnant's days_from_civil inverse.
     let z = day as i64 + 719_468;
     let era = z.div_euclid(146_097);

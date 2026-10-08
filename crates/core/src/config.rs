@@ -127,16 +127,24 @@ impl Config {
         }
     }
     pub fn save(&self) -> anyhow::Result<()> {
+        self.write_file("config.json").map(|_| ())
+    }
+    /// Save to `config.json.bak` next to the config (overwriting an older backup), e.g. before
+    /// an import replaces the config. Returns the backup path.
+    pub fn save_backup(&self) -> anyhow::Result<PathBuf> {
+        self.write_file("config.json.bak")
+    }
+    fn write_file(&self, name: &str) -> anyhow::Result<PathBuf> {
         let dir = Self::dir();
         std::fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
-        let path = dir.join("config.json");
+        let path = dir.join(name);
         // Unique temp name so concurrent saves (e.g. two nodes in one test process) never collide.
         static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let seq = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let tmp = dir.join(format!("config.json.{}.{seq}.tmp", std::process::id()));
+        let tmp = dir.join(format!("{name}.{}.{seq}.tmp", std::process::id()));
         std::fs::write(&tmp, serde_json::to_vec_pretty(self)?)?;
         std::fs::rename(&tmp, &path).with_context(|| format!("writing {}", path.display()))?;
-        Ok(())
+        Ok(path)
     }
 }
 

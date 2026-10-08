@@ -8,7 +8,9 @@
 use crate::node::NodeEvent;
 use crate::{ActiveTunnel, Config, Node, NodeId, Protocol, SavedTunnel, Service};
 use anyhow::Context;
+use std::collections::HashSet;
 use std::net::{Ipv4Addr, SocketAddr};
+use std::path::PathBuf;
 use std::sync::atomic::Ordering;
 use std::time::SystemTime;
 
@@ -70,6 +72,15 @@ pub struct LanWorld {
     pub motd: String,
     pub port: u16,
     pub last_seen: SystemTime,
+}
+
+/// Result of [`Node::apply_config`].
+#[derive(Debug, Clone)]
+pub struct ImportOutcome {
+    /// Where the previous config was saved.
+    pub backup: PathBuf,
+    /// The relay changed; it takes effect after a restart.
+    pub restart_required: bool,
 }
 
 /// Keeps file logging alive; drop it at process exit.
@@ -146,6 +157,12 @@ impl Node {
                 c.peer_names.insert(key.clone(), n);
             }
         })?;
+        self.activate_peer(id);
+        Ok(())
+    }
+
+    /// Runtime side of allowing a peer: drop its request and start connecting.
+    fn activate_peer(&self, id: NodeId) {
         self.inner
             .requests
             .lock()
@@ -154,7 +171,6 @@ impl Node {
         self.update_peer(id, |_| {});
         self.start_dialer(id);
         self.wake_dialer(id);
-        Ok(())
     }
 
     /// Remove from allowlist, names and saved tunnels; close its tunnels and connections. Saves config.
@@ -166,6 +182,13 @@ impl Node {
             c.peer_names.remove(&key);
             c.saved_tunnels.retain(|t| t.peer != key);
         })?;
+        self.deactivate_peer(id);
+        Ok(())
+    }
+
+    /// Runtime side of removing a peer (after its dialer stopped and config dropped it):
+    /// close its tunnels and connections and forget its live state.
+    fn deactivate_peer(&self, id: NodeId) {
         self.close_peer_tunnels(id);
         self.disconnect_peer(id);
         self.inner.peers.lock().unwrap().remove(&id);
@@ -174,7 +197,6 @@ impl Node {
             .lock()
             .unwrap()
             .retain(|(r, _)| r.id != id);
-        Ok(())
     }
 
     /// Set or clear the local display name for a peer. Saves config. Emits PeerStateChanged.
@@ -260,11 +282,7 @@ impl Node {
 
     /// Set or clear the custom relay. Saves config. Returns true when a restart is needed to apply it.
     pub async fn set_relay_url(&self, url: Option<String>) -> anyhow::Result<bool> {
-        let url = url.map(|u| u.trim().to_string()).filter(|u| !u.is_empty());
-        if let Some(u) = &url {
-            u.parse::<iroh::RelayUrl>()
-                .with_context(|| format!("invalid relay url {u}"))?;
-        }
+        let url = normalize_relay_url(url)?;
         let mut changed = false;
         self.edit_config(|c| {
             changed = c.relay_url != url;
@@ -287,6 +305,96 @@ impl Node {
         self.edit_config(|c| c.latency_log = enabled)?;
         self.set_latency_logging(enabled);
         Ok(())
+    }
+
+    // ---- import ----
+
+    /// Replace the whole config (an import, see [`crate::export`]) and bring the running node
+    /// in line with it: peers no longer allowed are disconnected and their tunnels closed, new
+    /// peers are dialed, removed services close their streams and the service list is pushed,
+    /// tunnels no longer saved are closed and new auto-open ones are opened, and LAN detection
+    /// and the latency log follow the new settings. The previous config is first saved to
+    /// `config.json.bak`. A new relay URL needs a restart (`restart_required`).
+    pub async fn apply_config(&self, mut new: Config) -> anyhow::Result<ImportOutcome> {
+        crate::export::validate(&new)?;
+        new.relay_url = normalize_relay_url(new.relay_url)?;
+        new.display_name = new.display_name.filter(|n| !n.trim().is_empty());
+        let old = self.config();
+        let backup = old.save_backup()?;
+
+        let ids = |c: &Config| -> HashSet<NodeId> {
+            c.allowed_peers
+                .iter()
+                .filter_map(|p| p.parse().ok())
+                .collect()
+        };
+        let (old_ids, new_ids) = (ids(&old), ids(&new));
+        let removed: Vec<NodeId> = old_ids.difference(&new_ids).copied().collect();
+        for &id in &removed {
+            self.stop_dialer(id);
+        }
+        self.edit_config(|c| *c = new.clone())?;
+
+        // Peers.
+        for id in removed {
+            self.deactivate_peer(id);
+        }
+        for &id in &new_ids {
+            if old_ids.contains(&id) {
+                // Picks up a changed local name.
+                self.update_peer(id, |_| {});
+            } else {
+                self.activate_peer(id);
+            }
+        }
+
+        // Hosted services.
+        for s in &old.services {
+            if !new.services.iter().any(|n| n.name == s.name) {
+                self.close_service_streams(&s.name);
+            }
+        }
+        if old.services != new.services {
+            self.push_services();
+        }
+
+        // Saved tunnels: close the ones that were saved and are gone or moved, open new ones.
+        let is_saved = |c: &Config, t: &ActiveTunnel, port: Option<u16>| {
+            c.saved_tunnels.iter().any(|s| {
+                s.peer == t.peer.to_string()
+                    && s.service == t.service
+                    && port.is_none_or(|p| p == s.local_port)
+            })
+        };
+        for t in self.tunnels() {
+            if is_saved(&old, &t, None) && !is_saved(&new, &t, Some(t.local_addr.port())) {
+                let _ = self.close_tunnel(&t).await;
+            }
+        }
+        let open = self.tunnels();
+        let to_open: Vec<SavedTunnel> = new
+            .saved_tunnels
+            .iter()
+            .filter(|s| {
+                s.auto_open
+                    && !open.iter().any(|t| {
+                        t.peer.to_string() == s.peer
+                            && t.service == s.service
+                            && t.local_addr.port() == s.local_port
+                    })
+            })
+            .cloned()
+            .collect();
+        self.open_saved_tunnels(to_open).await;
+
+        // Settings. The display name is read on each new connection.
+        self.sync_lan_listener();
+        self.set_latency_logging(new.latency_log);
+
+        Ok(ImportOutcome {
+            backup,
+            restart_required: old.relay_url != new.relay_url,
+        })
     }
 
     // ---- hosted services ----
@@ -469,4 +577,14 @@ impl Node {
                 .retain(|s| !(s.peer == key && s.service == service))
         })
     }
+}
+
+/// Trim a relay URL, treat empty as unset, and check it parses.
+fn normalize_relay_url(url: Option<String>) -> anyhow::Result<Option<String>> {
+    let url = url.map(|u| u.trim().to_string()).filter(|u| !u.is_empty());
+    if let Some(u) = &url {
+        u.parse::<iroh::RelayUrl>()
+            .with_context(|| format!("invalid relay url {u}"))?;
+    }
+    Ok(url)
 }
