@@ -20,6 +20,17 @@ pub fn rate(bytes_per_sec: f64) -> String {
     format!("{}/s", bytes(bytes_per_sec.max(0.0).round() as u64))
 }
 
+/// Download progress: "12.3 MB of 40.1 MB (30%)", or "12.3 MB" without a known total.
+pub fn progress(done: u64, total: Option<u64>) -> String {
+    match total {
+        Some(total) if total > 0 => {
+            let pct = (done.min(total) * 100) / total;
+            format!("{} of {} ({pct}%)", bytes(done), bytes(total))
+        }
+        _ => bytes(done),
+    }
+}
+
 /// "abcdef…wxyz" for long ids, unchanged for short ones.
 pub fn short_id(id: &str) -> String {
     let chars: Vec<char> = id.chars().collect();
@@ -51,6 +62,16 @@ pub fn ago(d: std::time::Duration) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn formats_progress() {
+        assert_eq!(
+            progress(3 * 1024 * 1024, Some(10 * 1024 * 1024)),
+            "3.0 MB of 10.0 MB (30%)"
+        );
+        assert_eq!(progress(1536, None), "1.5 KB");
+        assert_eq!(progress(0, Some(0)), "0 B");
+    }
 
     #[test]
     fn formats_bytes() {

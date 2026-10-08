@@ -48,6 +48,9 @@ pub struct Prefs {
     /// Version whose update banner the user dismissed.
     #[serde(default)]
     pub dismissed_update: Option<String>,
+    /// Download and verify new releases in the background, then offer "Restart to update".
+    #[serde(default)]
+    pub auto_install: bool,
 }
 
 fn default_true() -> bool {
@@ -70,6 +73,7 @@ impl Prefs {
                 launch_at_login: false,
                 check_updates: true,
                 dismissed_update: None,
+                auto_install: false,
             })
     }
 

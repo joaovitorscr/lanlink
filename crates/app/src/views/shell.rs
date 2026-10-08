@@ -5,8 +5,10 @@ use gpui::{
     Window,
 };
 
-use crate::state::{MenuKind, Root, Sheet, Tab};
+use crate::format;
+use crate::state::{MenuKind, Root, Sheet, Tab, UpdatePhase};
 use crate::theme::Theme;
+use crate::update;
 use crate::widgets::*;
 
 /// Height of the drag strip at the top of the content area (traffic lights live in it).
@@ -216,12 +218,78 @@ impl Root {
     }
 
     /// "lanlink X is available" strip above the pane, until dismissed for that version.
+    /// Also shows the download / install progress and its errors.
     fn render_update_banner(
         &mut self,
         t: &Theme,
         cx: &mut Context<Self>,
     ) -> Option<impl IntoElement> {
         let release = self.update_banner()?.clone();
+        let phase = self.update_phase().cloned();
+        let installable = update::plan(&release).is_some();
+        let v = &release.version;
+        let (icon, color, title, sub) = match &phase {
+            None => (
+                "refresh",
+                t.blue,
+                format!("lanlink {v} is available"),
+                format!("You have {}", lanlink_core::build_info::VERSION),
+            ),
+            Some(UpdatePhase::Downloading { done, total }) => (
+                "refresh",
+                t.blue,
+                format!("Downloading lanlink {v}…"),
+                format::progress(*done, *total),
+            ),
+            Some(UpdatePhase::Ready(_)) => (
+                "check",
+                t.green,
+                format!("lanlink {v} is ready to install"),
+                "lanlink restarts to finish the update".into(),
+            ),
+            Some(UpdatePhase::Installing) => (
+                "refresh",
+                t.blue,
+                format!("Installing lanlink {v}…"),
+                "lanlink will restart".into(),
+            ),
+            Some(UpdatePhase::Failed(e)) => (
+                "x",
+                t.red,
+                format!("Couldn't update to lanlink {v}"),
+                e.clone(),
+            ),
+        };
+        let url = release.url.clone();
+        let notes = move |label: &'static str, kind: ButtonKind, cx: &mut Context<Self>| {
+            let url = url.clone();
+            button(t, "update-notes", None, label, kind)
+                .on_click(cx.listener(move |this, _, _, cx| this.open_url(url.clone(), cx)))
+        };
+        let install = |label: &'static str, kind: ButtonKind, cx: &mut Context<Self>| {
+            button(t, "update-install", None, label, kind)
+                .on_click(cx.listener(|this, _, _, cx| this.install_update(cx)))
+        };
+        let buttons = match &phase {
+            None if installable => vec![
+                install("Install update", ButtonKind::Primary, cx),
+                notes("Release notes", ButtonKind::Secondary, cx),
+            ],
+            None => vec![notes("Download", ButtonKind::Primary, cx)],
+            Some(UpdatePhase::Downloading { .. }) => {
+                vec![notes("Release notes", ButtonKind::Secondary, cx)]
+            }
+            Some(UpdatePhase::Ready(_)) => vec![
+                install("Restart to update", ButtonKind::Primary, cx),
+                notes("Release notes", ButtonKind::Secondary, cx),
+            ],
+            Some(UpdatePhase::Installing) => vec![],
+            Some(UpdatePhase::Failed(_)) => vec![
+                install("Try again", ButtonKind::Secondary, cx),
+                notes("Download", ButtonKind::Primary, cx),
+            ],
+        };
+        let installing = matches!(phase, Some(UpdatePhase::Installing));
         Some(
             div()
                 .flex_none()
@@ -233,31 +301,19 @@ impl Root {
                         .px_3p5()
                         .py_2()
                         .rounded(px(10.))
-                        .bg(t.blue.opacity(0.1))
+                        .bg(color.opacity(0.1))
                         .border_1()
-                        .border_color(t.blue.opacity(0.3))
-                        .child(tile("refresh", t.blue, 24., t.white))
-                        .child(title_sub(
-                            t,
-                            format!("lanlink {} is available", release.version),
-                            Some(format!("You have {}", lanlink_core::build_info::VERSION)),
-                        ))
-                        .child(
-                            button(
-                                t,
-                                "update-download",
-                                None,
-                                "Open download page",
-                                ButtonKind::Primary,
+                        .border_color(color.opacity(0.3))
+                        .child(tile(icon, color, 24., t.white))
+                        .child(title_sub(t, title, Some(sub)))
+                        .children(buttons)
+                        .when(!installing, |el| {
+                            el.child(
+                                icon_button(t, "update-dismiss", "x").on_click(
+                                    cx.listener(|this, _, _, cx| this.dismiss_update(cx)),
+                                ),
                             )
-                            .on_click(cx.listener(
-                                move |this, _, _, cx| this.open_url(release.url.clone(), cx),
-                            )),
-                        )
-                        .child(
-                            icon_button(t, "update-dismiss", "x")
-                                .on_click(cx.listener(|this, _, _, cx| this.dismiss_update(cx))),
-                        ),
+                        }),
                 ),
         )
     }

@@ -1,11 +1,11 @@
-//! Settings pane: identity, network, appearance, files.
+//! Settings pane: identity, network, appearance, updates, files.
 
 use gpui::{div, prelude::*, px, ClipboardItem, Context};
 use lanlink_core::Config;
 
 use crate::format;
 use crate::lifecycle;
-use crate::state::{MenuKind, Root};
+use crate::state::{MenuKind, Root, UpdatePhase};
 use crate::update;
 use crate::views::peers::pane_header;
 use crate::widgets::*;
@@ -229,21 +229,64 @@ impl Root {
         }
 
         let u = &self.update;
-        let status = if u.checking {
-            "Checking for updates…".to_string()
-        } else if let Some(r) = &u.available {
-            format!("lanlink {} is available", r.version)
-        } else if u.failed {
-            "Couldn't check for updates".to_string()
-        } else if u.last_check.is_some() {
-            "You're up to date".to_string()
-        } else {
-            "Not checked yet".to_string()
+        let phase = self.update_phase().cloned();
+        let status = match (&phase, &u.available) {
+            (Some(UpdatePhase::Downloading { done, total }), Some(r)) => format!(
+                "Downloading lanlink {}: {}",
+                r.version,
+                format::progress(*done, *total)
+            ),
+            (Some(UpdatePhase::Ready(_)), Some(r)) => {
+                format!("lanlink {} is ready to install", r.version)
+            }
+            (Some(UpdatePhase::Installing), Some(r)) => {
+                format!("Installing lanlink {}…", r.version)
+            }
+            (Some(UpdatePhase::Failed(_)), Some(r)) => {
+                format!("Couldn't update to lanlink {}", r.version)
+            }
+            _ if u.checking => "Checking for updates…".to_string(),
+            (_, Some(r)) => format!("lanlink {} is available", r.version),
+            _ if u.failed => "Couldn't check for updates".to_string(),
+            _ if u.last_check.is_some() => "You're up to date".to_string(),
+            _ => "Not checked yet".to_string(),
         };
-        let last = u
-            .last_check
-            .map(|at| format!("Last checked {}", format::ago(at.elapsed())));
+        let sub = match &phase {
+            Some(UpdatePhase::Failed(e)) => Some(e.clone()),
+            _ => u
+                .last_check
+                .map(|at| format!("Last checked {}", format::ago(at.elapsed()))),
+        };
+        let installable = u.available.as_ref().and_then(update::plan).is_some();
         let download = u.available.as_ref().map(|r| r.url.clone());
+        let action = match &phase {
+            Some(UpdatePhase::Ready(_)) => Some("Restart to update"),
+            None | Some(UpdatePhase::Failed(_)) if installable => Some("Install"),
+            _ => None,
+        };
+        let download = download.filter(|_| !installable);
+
+        let auto = if update::install_target().is_some() {
+            group_row(&t, false)
+                .child(title_sub(
+                    &t,
+                    "Install updates automatically",
+                    Some(
+                        "Downloads and verifies new versions in the background, \
+                         then asks you to restart. Nothing installs until you do.",
+                    ),
+                ))
+                .child(
+                    toggle(&t, "auto-install", self.prefs.auto_install)
+                        .on_click(cx.listener(|this, _, _, cx| this.toggle_auto_install(cx))),
+                )
+        } else {
+            group_row(&t, false).child(title_sub(
+                &t,
+                "Install updates automatically",
+                Some(update::manual_reason()),
+            ))
+        };
 
         group(&t)
             .child(
@@ -253,7 +296,7 @@ impl Root {
                         "Check for updates",
                         Some(format!(
                             "Looks for new {} releases on GitHub every 6 hours",
-                            lanlink_core::build_info::CHANNEL
+                            update::channel()
                         )),
                     ))
                     .child(
@@ -261,9 +304,22 @@ impl Root {
                             .on_click(cx.listener(|this, _, _, cx| this.toggle_update_checks(cx))),
                     ),
             )
+            .child(auto)
             .child(
                 group_row(&t, true)
-                    .child(title_sub(&t, status, last))
+                    .child(title_sub(&t, status, sub))
+                    .when_some(action, |el, label| {
+                        el.child(
+                            button(
+                                &t,
+                                "update-install-settings",
+                                None,
+                                label,
+                                ButtonKind::Primary,
+                            )
+                            .on_click(cx.listener(|this, _, _, cx| this.install_update(cx))),
+                        )
+                    })
                     .when_some(download, |el, url| {
                         el.child(
                             button(&t, "update-open", None, "Download", ButtonKind::Primary)
