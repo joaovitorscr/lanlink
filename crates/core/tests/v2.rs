@@ -117,24 +117,21 @@ async fn unknown_peer_becomes_request_then_allowed() -> anyhow::Result<()> {
     let err = p.last_error.unwrap_or_default();
     assert!(err.contains("accept your request"), "last_error = {err:?}");
 
-    // The host saw a request with the client's name.
-    let req = tokio::time::timeout(Duration::from_secs(10), async {
+    // The host turned it away without raising a connection request.
+    let req = tokio::time::timeout(Duration::from_secs(3), async {
         loop {
             if let Ok(NodeEvent::PeerRequest(r)) = host_events.recv().await {
                 return r;
             }
         }
     })
-    .await?;
-    assert_eq!(req.id, client_id);
-    assert_eq!(req.name.as_deref(), Some("Tester"));
-    let pending = host.pending_requests();
-    assert_eq!(pending.len(), 1);
+    .await;
+    assert!(req.is_err(), "unknown peer raised a request: {req:?}");
+    assert!(host.pending_requests().is_empty());
     assert_eq!(host.services_status()[0].connections, 0);
 
     // Allow: the client's auto-reconnect gets through without calling connect again.
-    host.respond_request(client_id, true, None).await?;
-    assert!(host.pending_requests().is_empty());
+    host.add_peer(client_id, None).await?;
     assert!(host.config().allowed_peers.contains(&client_id.to_string()));
     assert!(
         wait_for(40, || connected(&client, host_id)).await,

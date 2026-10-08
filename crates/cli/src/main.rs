@@ -57,13 +57,13 @@ enum Cmd {
     },
     /// List allowed peers.
     Peers,
-    /// Run briefly and list peers that asked to connect to us.
+    /// Run briefly and list join requests to our networks.
     Requests {
         /// How long to listen for requests, in seconds.
         #[arg(long, default_value_t = 15)]
         secs: u64,
     },
-    /// Allow a peer that asked to connect (same as `allow`).
+    /// Allow a peer by ID (same as `allow`).
     Accept {
         node_id: NodeId,
         #[arg(long)]
@@ -238,14 +238,14 @@ async fn main() -> anyhow::Result<()> {
         Cmd::Requests { secs } => {
             let node = Node::start(config).await?;
             println!("node id: {}", node.id());
-            println!("listening for connection requests for {secs}s; ctrl-c to stop early");
+            println!("listening for join requests for {secs}s; ctrl-c to stop early");
             let mut events = node.subscribe();
             let _ = tokio::time::timeout(
                 std::time::Duration::from_secs(secs),
                 run_until_ctrl_c(&mut events, |ev| {
                     if let NodeEvent::PeerRequest(r) = ev {
                         println!(
-                            "request from {} ({})",
+                            "join request from {} ({})",
                             r.id,
                             r.name.as_deref().unwrap_or("no name")
                         );
@@ -257,16 +257,14 @@ async fn main() -> anyhow::Result<()> {
             if reqs.is_empty() {
                 println!("no pending requests");
             } else {
-                println!("pending requests (accept with `lanlink accept <id> --name <name>`):");
+                println!("pending join requests (answer with `lanlink network approve`):");
                 for r in reqs {
-                    match &r.network {
-                        Some(net) => println!(
-                            "{}  {}  wants to join network {net} (`lanlink network approve`)",
-                            r.id,
-                            r.name.as_deref().unwrap_or("-")
-                        ),
-                        None => println!("{}  {}", r.id, r.name.as_deref().unwrap_or("-")),
-                    }
+                    println!(
+                        "{}  {}  wants to join network {}",
+                        r.id,
+                        r.name.as_deref().unwrap_or("-"),
+                        r.network.as_deref().unwrap_or("-")
+                    );
                 }
             }
             shutdown(node).await?;
@@ -556,10 +554,10 @@ fn print_event(ev: &NodeEvent) {
         NodeEvent::TunnelClosed(t) => println!("tunnel closed: {} -> {}", t.local_addr, t.service),
         NodeEvent::Error(e) => eprintln!("error: {e}"),
         NodeEvent::PeerRequest(r) => println!(
-            "connection request from {} ({}); allow with `lanlink accept {}`",
+            "join request from {} ({}) for network {}",
             r.name.as_deref().unwrap_or("no name"),
             r.id,
-            r.id
+            r.network.as_deref().unwrap_or("-")
         ),
         NodeEvent::NetworkChanged(_)
         | NodeEvent::LanWorldsChanged(_)
