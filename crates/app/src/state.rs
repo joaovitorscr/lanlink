@@ -24,7 +24,6 @@ const UPDATE_INTERVAL: Duration = Duration::from_secs(6 * 60 * 60);
 /// A modal sheet dropping from the title bar.
 #[derive(Clone, PartialEq, Eq)]
 pub enum Sheet {
-    AddPeer,
     AddService,
     RenamePeer(NodeId),
     RemovePeer(NodeId),
@@ -210,8 +209,6 @@ struct Rate {
 }
 
 pub struct Inputs {
-    pub peer_id: Entity<TextInput>,
-    pub peer_name: Entity<TextInput>,
     pub svc_name: Entity<TextInput>,
     pub svc_port: Entity<TextInput>,
     pub svc_host: Entity<TextInput>,
@@ -323,8 +320,6 @@ impl Root {
             cx.new(|cx| TextInput::new(placeholder, cx))
         };
         let inputs = Inputs {
-            peer_id: input("Friend's ID", cx),
-            peer_name: input("Name (optional)", cx),
             svc_name: input("Name, e.g. minecraft", cx),
             svc_port: input("Port", cx),
             svc_host: input("127.0.0.1 (optional)", cx),
@@ -336,8 +331,6 @@ impl Root {
             join_name: input("Your name", cx),
         };
         let subscriptions = vec![
-            submit(&inputs.peer_id, cx, Self::add_peer),
-            submit(&inputs.peer_name, cx, Self::add_peer),
             submit(&inputs.svc_name, cx, Self::add_service),
             submit(&inputs.svc_port, cx, Self::add_service),
             submit(&inputs.svc_host, cx, Self::add_service),
@@ -623,37 +616,12 @@ impl Root {
 
     // ---- peers ----
 
-    pub fn add_peer(&mut self, cx: &mut Context<Self>) {
-        let id = self.inputs.peer_id.read(cx).text().trim().to_string();
-        let peer = match id.parse::<NodeId>() {
-            Ok(p) => p,
-            Err(_) => {
-                self.show_error(
-                    "That doesn't look like a lanlink ID. Ask your friend to copy it again.",
-                    cx,
-                );
-                return;
-            }
-        };
-        self.inputs.peer_id.update(cx, |i, cx| i.take(cx));
-        let name = non_empty(self.inputs.peer_name.update(cx, |i, cx| i.take(cx)));
-        self.sheet = None;
-        self.run_then(
-            move |n| async move { n.add_peer(peer, name).await },
-            |()| Msg::Info("Friend added, connecting…".into()),
-        );
-        cx.notify();
-    }
-
     pub fn respond_request(&mut self, req: PeerRequest, allow: bool, cx: &mut Context<Self>) {
         self.requests
             .retain(|r| !(r.id == req.id && r.network == req.network));
         let id = req.id;
-        match req.network {
-            Some(net) => {
-                self.run(move |n| async move { n.respond_join(&net, id, allow).await });
-            }
-            None => self.run(move |n| async move { n.respond_request(id, allow, None).await }),
+        if let Some(net) = req.network {
+            self.run(move |n| async move { n.respond_join(&net, id, allow).await });
         }
         cx.notify();
     }

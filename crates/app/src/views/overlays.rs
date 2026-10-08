@@ -20,7 +20,6 @@ impl Root {
     pub fn render_sheet(&mut self, t: &Theme, cx: &mut Context<Self>) -> Option<AnyElement> {
         let sheet = self.sheet.clone()?;
         let body: AnyElement = match sheet {
-            Sheet::AddPeer => self.sheet_add_peer(t, cx).into_any_element(),
             Sheet::AddService => self.sheet_add_service(t, cx).into_any_element(),
             Sheet::RenamePeer(id) => self.sheet_rename(t, id, cx).into_any_element(),
             Sheet::RemovePeer(id) => self.sheet_remove_peer(t, id, cx).into_any_element(),
@@ -118,27 +117,6 @@ impl Root {
                 button(t, "sheet-ok", None, label.to_string(), kind)
                     .on_click(cx.listener(move |this, _, _, cx| f(this, cx))),
             )
-    }
-
-    fn sheet_add_peer(&mut self, t: &Theme, cx: &mut Context<Self>) -> impl IntoElement {
-        col()
-            .child(self.sheet_head(
-                t,
-                "Add a peer",
-                "Paste the ID your friend copied from their lanlink.",
-            ))
-            .child(self.frow(t, "Their ID", self.inputs.peer_id.clone()))
-            .child(self.frow(t, "Name", self.inputs.peer_name.clone()))
-            .child(
-                div()
-                    .ml(px(110.))
-                    .child(small(t, "They have to allow you on their side too.")),
-            )
-            .child(self.actions(
-                t,
-                cx,
-                ("Add", ButtonKind::Primary, Box::new(|r, cx| r.add_peer(cx))),
-            ))
     }
 
     fn sheet_add_service(&mut self, t: &Theme, cx: &mut Context<Self>) -> impl IntoElement {

@@ -1,4 +1,4 @@
-use crate::api::{LanWorld, NetworkStatus, PeerRequest};
+use crate::api::{LanWorld, NetworkStatus};
 use crate::forward::{self, ClientFlow, Counters, FlowSender, UDP_BUF};
 use crate::instance::InstanceLock;
 use crate::lan;
@@ -47,9 +47,6 @@ pub(crate) const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
 const HELLO_TIMEOUT: Duration = Duration::from_secs(5);
 const BACKOFF_MIN: Duration = Duration::from_secs(2);
 const BACKOFF_MAX: Duration = Duration::from_secs(30);
-const REQUEST_TTL: Duration = Duration::from_secs(10 * 60);
-const REQUEST_MAX: usize = 20;
-const REQUEST_MIN_GAP: Duration = Duration::from_secs(2);
 const PROBE_INTERVAL: Duration = Duration::from_secs(3);
 const PROBE_TIMEOUT: Duration = Duration::from_millis(500);
 const NETWORK_POLL_INTERVAL: Duration = Duration::from_secs(1);
@@ -187,8 +184,6 @@ pub(crate) struct Inner {
     latency_log: Mutex<LatencyLog>,
     /// Minecraft LAN listener, running while LAN detection is enabled.
     lan_task: Mutex<Option<AbortHandle>>,
-    pub(crate) requests: Mutex<Vec<(PeerRequest, Instant)>>,
-    request_seen: Mutex<HashMap<NodeId, Instant>>,
     pub(crate) network: Mutex<NetworkStatus>,
     pub(crate) lan: Mutex<Vec<(LanWorld, Instant)>>,
     pub(crate) svc_live: Mutex<HashMap<String, SvcLive>>,
@@ -407,8 +402,6 @@ impl Node {
             epoch: Instant::now(),
             latency_log: Mutex::new(latency_log),
             lan_task: Mutex::new(None),
-            requests: Mutex::new(Vec::new()),
-            request_seen: Mutex::new(HashMap::new()),
             network: Mutex::new(NetworkStatus::default()),
             lan: Mutex::new(Vec::new()),
             svc_live: Mutex::new(HashMap::new()),
@@ -1231,7 +1224,7 @@ impl Node {
         let peer = conn.remote_id();
         let allowed = self.is_allowed(&peer);
         // Peers that are not allowed only get to send one message: a JoinRequest is handled,
-        // anything else becomes a connection request.
+        // anything else is turned away. Strangers only get in through a network.
         let limit = if allowed {
             HANDSHAKE_TIMEOUT
         } else {
@@ -1247,7 +1240,6 @@ impl Node {
             Ok(Ok(x)) => x,
             _ if !allowed => {
                 conn.close(CLOSE_PENDING.into(), b"pending");
-                self.record_request(peer, None);
                 return Ok(());
             }
             Ok(Err(e)) => return Err(e),
@@ -1262,15 +1254,14 @@ impl Node {
                 self.handle_join(conn, send, network, token, name).await;
                 return Ok(());
             }
-            ControlMsg::Hello { name } => sanitize_name(name),
+            ControlMsg::Hello { name } if allowed => sanitize_name(name),
             other if allowed => bail!("expected Hello, got {other:?}"),
-            _ => None,
+            _ => {
+                tracing::debug!(%peer, "turned away unknown peer");
+                conn.close(CLOSE_PENDING.into(), b"pending");
+                return Ok(());
+            }
         };
-        if !allowed {
-            conn.close(CLOSE_PENDING.into(), b"pending");
-            self.record_request(peer, name);
-            return Ok(());
-        }
         tracing::info!(%peer, "accepted connection");
         let gen = self.inner.svc_gen.load(Ordering::SeqCst);
         let services = tokio::time::timeout(HANDSHAKE_TIMEOUT, async {
@@ -1319,39 +1310,6 @@ impl Node {
         let n = self.clone();
         self.spawn(async move { n.run_connection(conn, send, recv, false).await });
         Ok(())
-    }
-
-    /// A peer that may not connect said hello: show it as a connection request.
-    /// It never gets access to any service.
-    fn record_request(&self, peer: NodeId, name: Option<String>) {
-        let recent = {
-            let mut seen = self.inner.request_seen.lock().unwrap();
-            seen.retain(|_, at| at.elapsed() < REQUEST_TTL);
-            let recent = seen
-                .get(&peer)
-                .is_some_and(|at| at.elapsed() < REQUEST_MIN_GAP);
-            if !recent {
-                seen.insert(peer, Instant::now());
-            }
-            recent
-        };
-        if recent {
-            return;
-        }
-        tracing::info!(%peer, ?name, "connection request from unknown peer");
-        let req = PeerRequest {
-            id: peer,
-            name,
-            at: SystemTime::now(),
-            network: None,
-        };
-        {
-            let mut reqs = self.inner.requests.lock().unwrap();
-            reqs.retain(|(r, at)| r.id != peer && at.elapsed() < REQUEST_TTL);
-            reqs.insert(0, (req.clone(), Instant::now()));
-            reqs.truncate(REQUEST_MAX);
-        }
-        self.emit(NodeEvent::PeerRequest(req));
     }
 
     /// Drive one established connection until it closes.

@@ -61,25 +61,15 @@ impl Root {
                 )))
             })
             .children(networks.iter().map(|net| self.render_network(&t, net, cx)))
-            .child(
-                row()
-                    .child(glabel(&t, "Direct peers").flex_1())
-                    .child(
-                        button(&t, "add-peer", Some("user-plus"), "Add peer", ButtonKind::Secondary)
-                            .mt_3()
-                            .on_click(cx.listener(|this, _, _, cx| this.open_sheet(Sheet::AddPeer, cx))),
-                    ),
-            )
-            .child(
-                group(&t)
-                    .when(direct.is_empty(), |el| {
-                        el.child(empty(&t, "Friends you add by their ID, outside any network, show up here."))
-                    })
-                    .children(direct.iter().enumerate().map(|(i, p)| {
+            // Peers added by ID before networks; kept so they can still be removed.
+            .when(n > 0, |el| {
+                el.child(glabel(&t, "Direct peers")).child(group(&t).children(
+                    direct.iter().enumerate().map(|(i, p)| {
                         let name = self.peer_name(p.id);
                         self.render_peer(&t, p, name, MenuKind::Peer(p.id), false, i + 1 == n, cx)
-                    })),
-            )
+                    }),
+                ))
+            })
             .child(glabel(&t, "Your ID"))
             .child(
                 group(&t).child(
@@ -94,7 +84,7 @@ impl Root {
                                         .text_size(px(12.))
                                         .child(id.clone().unwrap_or_else(|| "Starting…".into())),
                                 )
-                                .child(small(&t, "Friends can also add you directly, outside any network.")),
+                                .child(small(&t, "Network owners see this when you ask to join.")),
                         )
                         .when_some(id, |el, full| {
                             el.child(
@@ -132,15 +122,12 @@ impl Root {
             .map(|(i, r)| {
                 let key = r.id.to_string();
                 let who = r.name.clone().unwrap_or_else(|| format::short_id(&key));
-                let title = match &r.network {
-                    Some(net) => {
-                        let net = self
-                            .network(net)
-                            .map_or("your network".into(), |n| n.name.clone());
-                        format!("{who} wants to join {net}")
-                    }
-                    None => format!("{who} wants to connect"),
-                };
+                let net = r
+                    .network
+                    .as_deref()
+                    .and_then(|net| self.network(net))
+                    .map_or("your network".into(), |n| n.name.clone());
+                let title = format!("{who} wants to join {net}");
                 let (deny, allow): (PeerRequest, PeerRequest) = (r.clone(), r);
                 row()
                     .mt_3p5()
