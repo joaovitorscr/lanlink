@@ -1,4 +1,4 @@
-//! Sheets (modal, drop from the title bar) and popover menus.
+//! Sheets (modal, centered in the window) and popover menus.
 
 use gpui::{
     anchored, deferred, div, prelude::*, px, AnyElement, ClipboardItem, Context, Corner,
@@ -45,7 +45,7 @@ impl Root {
                     .bg(t.scrim)
                     .flex()
                     .justify_center()
-                    .items_start()
+                    .items_center()
                     .on_mouse_down(
                         MouseButton::Left,
                         cx.listener(|this, _, _, cx| this.close_overlays(cx)),
@@ -57,8 +57,8 @@ impl Root {
                             .w(px(440.))
                             .px_5()
                             .pt_5()
-                            .pb_4()
-                            .rounded_b(px(14.))
+                            .pb_5()
+                            .rounded(px(14.))
                             .bg(t.sheet)
                             .border_1()
                             .border_color(t.card_stroke)

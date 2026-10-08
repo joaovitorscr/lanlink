@@ -66,7 +66,7 @@ impl Root {
                     .child(glabel(&t, "Direct peers").flex_1())
                     .child(
                         button(&t, "add-peer", Some("user-plus"), "Add peer", ButtonKind::Secondary)
-                            .mt_3()
+                            .mt_3().mb_1p5()
                             .on_click(cx.listener(|this, _, _, cx| this.open_sheet(Sheet::AddPeer, cx))),
                     ),
             )
