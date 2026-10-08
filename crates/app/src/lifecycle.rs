@@ -99,6 +99,11 @@ impl Root {
         self.save_prefs(cx);
     }
 
+    pub fn toggle_hide_ids(&mut self, cx: &mut Context<Self>) {
+        self.prefs.hide_ids = !self.prefs.hide_ids;
+        self.save_prefs(cx);
+    }
+
     pub fn toggle_launch_at_login(&mut self, cx: &mut Context<Self>) {
         let enable = !self.prefs.launch_at_login;
         match set_launch_at_login(enable) {

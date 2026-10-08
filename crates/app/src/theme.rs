@@ -51,6 +51,9 @@ pub struct Prefs {
     /// Download and verify new releases in the background, then offer "Restart to update".
     #[serde(default)]
     pub auto_install: bool,
+    /// Mask node IDs in the UI, e.g. while streaming. Copy still copies the real ID.
+    #[serde(default = "default_true")]
+    pub hide_ids: bool,
 }
 
 fn default_true() -> bool {
@@ -74,6 +77,7 @@ impl Prefs {
                 check_updates: true,
                 dismissed_update: None,
                 auto_install: false,
+                hide_ids: true,
             })
     }
 

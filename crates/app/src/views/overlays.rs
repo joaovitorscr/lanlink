@@ -1,9 +1,11 @@
 //! Sheets (modal, centered in the window) and popover menus.
 
 use gpui::{
-    anchored, deferred, div, prelude::*, px, AnyElement, ClipboardItem, Context, Corner,
-    FontWeight, MouseButton, SharedString, Window,
+    anchored, deferred, div, ease_out_quint, prelude::*, px, Animation, AnimationExt, AnyElement,
+    ClipboardItem, Context, Corner, FontWeight, MouseButton, SharedString, Window,
 };
+use std::time::Duration;
+
 use lanlink_core::export::ImportMode;
 use lanlink_core::{Approval, InviteExpiry, NetworkColor, NodeId, Protocol};
 
@@ -34,6 +36,7 @@ impl Root {
             }
             Sheet::LeaveNetwork(id) => self.sheet_leave(t, id, cx).into_any_element(),
             Sheet::DeleteNetwork(id) => self.sheet_delete(t, id, cx).into_any_element(),
+            Sheet::Welcome => self.sheet_welcome(t, cx).into_any_element(),
         };
         Some(
             deferred(
@@ -63,7 +66,18 @@ impl Root {
                             .border_color(t.card_stroke)
                             .shadow_2xl()
                             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                            .child(body),
+                            .child(body)
+                            .with_animation(
+                                "sheet-in",
+                                Animation::new(Duration::from_millis(180))
+                                    .with_easing(ease_out_quint()),
+                                |el, d| el.opacity(d).mt(px(12. * (1. - d))),
+                            ),
+                    )
+                    .with_animation(
+                        "scrim-in",
+                        Animation::new(Duration::from_millis(150)),
+                        |el, d| el.opacity(d),
                     ),
             )
             .with_priority(2)
@@ -116,6 +130,36 @@ impl Root {
             .child(
                 button(t, "sheet-ok", None, label.to_string(), kind)
                     .on_click(cx.listener(move |this, _, _, cx| f(this, cx))),
+            )
+    }
+
+    fn sheet_welcome(&mut self, t: &Theme, cx: &mut Context<Self>) -> impl IntoElement {
+        let device = crate::format::device_name();
+        col()
+            .child(self.sheet_head(
+                t,
+                "Welcome to lanlink",
+                "Pick a name your friends will see. You can change it later in Settings.",
+            ))
+            .child(self.frow(t, "Name", self.inputs.display_name.clone()))
+            .child(
+                row()
+                    .justify_end()
+                    .mt_4()
+                    .child(
+                        button(
+                            t,
+                            "welcome-device",
+                            None,
+                            format!("Use \"{device}\""),
+                            ButtonKind::Secondary,
+                        )
+                        .on_click(cx.listener(|this, _, _, cx| this.finish_welcome(None, cx))),
+                    )
+                    .child(
+                        button(t, "welcome-save", None, "Save", ButtonKind::Primary)
+                            .on_click(cx.listener(|this, _, _, cx| this.save_display_name(cx))),
+                    ),
             )
     }
 

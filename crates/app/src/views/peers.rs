@@ -34,6 +34,37 @@ fn state_style(t: &Theme, s: ConnState) -> (&'static str, Hsla, Hsla) {
 }
 
 impl Root {
+    /// An ID, truncated, with an eye button that reveals or hides it when Hide IDs is on.
+    pub fn id_line(&self, t: &Theme, key: &str, cx: &mut Context<Self>) -> gpui::Div {
+        let hidden = self.prefs.hide_ids && !self.revealed_ids.contains(key);
+        let text = if hidden {
+            self.shown_id(key)
+        } else if key.chars().count() > 20 {
+            format!("{}…", key.chars().take(20).collect::<String>())
+        } else {
+            key.to_string()
+        };
+        let k = key.to_string();
+        row()
+            .min_w_0()
+            .gap_1()
+            .text_size(px(11.5))
+            .text_color(t.fg2)
+            .child(div().truncate().min_w_0().child(text))
+            .when(self.prefs.hide_ids, |el| {
+                el.child(
+                    icon_button(
+                        t,
+                        eid("reveal-id", key),
+                        if hidden { "eye" } else { "eye-off" },
+                    )
+                    .on_click(
+                        cx.listener(move |this, _, _, cx| this.toggle_revealed(k.clone(), cx)),
+                    ),
+                )
+            })
+    }
+
     pub fn render_peers(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let t = theme(cx);
         let id = self.my_id().map(|id| id.to_string());
@@ -78,12 +109,14 @@ impl Root {
                             col()
                                 .flex_1()
                                 .min_w_0()
-                                .child(
-                                    div()
-                                        .truncate()
+                                .child(match &id {
+                                    Some(key) => self
+                                        .id_line(&t, key, cx)
                                         .text_size(px(12.))
-                                        .child(id.clone().unwrap_or_else(|| "Starting…".into())),
-                                )
+                                        .text_color(t.fg)
+                                        .into_any_element(),
+                                    None => div().text_size(px(12.)).child("Starting…").into_any_element(),
+                                })
                                 .child(small(&t, "Network owners see this when you ask to join.")),
                         )
                         .when_some(id, |el, full| {
@@ -121,7 +154,7 @@ impl Root {
             .enumerate()
             .map(|(i, r)| {
                 let key = r.id.to_string();
-                let who = r.name.clone().unwrap_or_else(|| format::short_id(&key));
+                let who = r.name.clone().unwrap_or_else(|| self.shown_id(&key));
                 let net = r
                     .network
                     .as_deref()
@@ -138,7 +171,18 @@ impl Root {
                     .border_1()
                     .border_color(t.blue.opacity(0.3))
                     .child(avatar(t, &who, &key, 30.))
-                    .child(title_sub(t, title, Some(format::short_id(&key))))
+                    .child(
+                        col()
+                            .flex_1()
+                            .min_w_0()
+                            .child(
+                                div()
+                                    .truncate()
+                                    .font_weight(FontWeight::MEDIUM)
+                                    .child(title),
+                            )
+                            .child(self.id_line(t, &key, cx)),
+                    )
                     .child(
                         button(t, eid("deny", i), None, "Ignore", ButtonKind::Secondary).on_click(
                             cx.listener(move |this, _, _, cx| {

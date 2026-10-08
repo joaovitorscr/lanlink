@@ -336,7 +336,7 @@ impl Root {
 
     fn render_toast(&mut self, t: &Theme, cx: &mut Context<Self>) -> Option<impl IntoElement> {
         let toast = self.toast.as_ref()?;
-        let color = if toast.error { t.red } else { t.blue };
+        let color = if toast.error { t.red } else { t.green };
         Some(
             div()
                 .absolute()
@@ -348,16 +348,33 @@ impl Root {
                 .child(
                     div()
                         .id("toast")
-                        .px_3p5()
-                        .py_2()
-                        .rounded(px(10.))
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .max_w(px(420.))
+                        .pl_1p5()
+                        .pr_3p5()
+                        .py_1p5()
+                        .rounded_full()
                         .bg(t.menu)
                         .border_1()
-                        .border_color(color.opacity(0.5))
+                        .border_color(t.sidebar_stroke)
                         .shadow_lg()
                         .text_size(px(12.5))
+                        .font_weight(FontWeight::MEDIUM)
                         .cursor_pointer()
-                        .child(toast.text.clone())
+                        .child(
+                            div()
+                                .flex()
+                                .flex_none()
+                                .items_center()
+                                .justify_center()
+                                .size(px(22.))
+                                .rounded_full()
+                                .bg(color.opacity(0.18))
+                                .child(ic(if toast.error { "x" } else { "check" }, 13., color)),
+                        )
+                        .child(div().truncate().child(toast.text.clone()))
                         .on_click(cx.listener(|this, _, _, cx| {
                             this.toast = None;
                             cx.notify();

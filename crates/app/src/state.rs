@@ -38,6 +38,8 @@ pub enum Sheet {
     RemoveMember(String, NodeId),
     LeaveNetwork(String),
     DeleteNetwork(String),
+    /// First launch: pick a display name, or take one made from the device name.
+    Welcome,
 }
 
 /// Which popover menu is open.
@@ -242,6 +244,8 @@ pub struct Root {
     pub new_network: NewNetwork,
     /// Networks whose member list is folded away (this session only).
     pub collapsed: HashSet<String>,
+    /// IDs the user chose to show while Hide IDs is on. Not persisted.
+    pub revealed_ids: HashSet<String>,
     pub sheet: Option<Sheet>,
     pub pending_import: Option<PendingImport>,
     pub menu: Option<OpenMenu>,
@@ -363,6 +367,7 @@ impl Root {
             svc_minecraft: false,
             new_network: NewNetwork::default(),
             collapsed: HashSet::new(),
+            revealed_ids: HashSet::new(),
             sheet: None,
             pending_import: None,
             menu: None,
@@ -482,6 +487,9 @@ impl Root {
         self.resync();
         self.poll(cx);
         self.fill_setting_inputs(cx);
+        if self.config.display_name.is_none() && self.sheet.is_none() {
+            self.open_sheet(Sheet::Welcome, cx);
+        }
     }
 
     /// Put the saved display name and relay into their Settings fields.
@@ -569,7 +577,9 @@ impl Root {
             generation,
         });
         cx.spawn(async move |this, cx| {
-            cx.background_executor().timer(Duration::from_secs(6)).await;
+            cx.background_executor()
+                .timer(Duration::from_secs(if error { 6 } else { 3 }))
+                .await;
             let _ = this.update(cx, |s, cx| {
                 if s.toast.as_ref().is_some_and(|t| t.generation == generation) {
                     s.toast = None;
@@ -783,6 +793,13 @@ impl Root {
         self.open_sheet(Sheet::RenameNetwork(id), cx);
     }
 
+    pub fn toggle_revealed(&mut self, key: String, cx: &mut Context<Self>) {
+        if !self.revealed_ids.remove(&key) {
+            self.revealed_ids.insert(key);
+        }
+        cx.notify();
+    }
+
     pub fn toggle_collapsed(&mut self, id: String, cx: &mut Context<Self>) {
         if !self.collapsed.remove(&id) {
             self.collapsed.insert(id);
@@ -812,7 +829,26 @@ impl Root {
         cx.notify();
     }
 
+    /// Close the welcome sheet, saving `name` or the device name when there is none.
+    pub fn finish_welcome(&mut self, name: Option<String>, cx: &mut Context<Self>) {
+        let name = name.unwrap_or_else(format::device_name);
+        self.config.display_name = Some(name.clone());
+        self.inputs
+            .display_name
+            .update(cx, |i, cx| i.set_text(name.clone(), cx));
+        self.sheet = None;
+        self.run_then(
+            move |n| async move { n.set_display_name(Some(name)).await },
+            |()| Msg::Info("Name saved".into()),
+        );
+        cx.notify();
+    }
+
     pub fn close_overlays(&mut self, cx: &mut Context<Self>) {
+        // Dismissing the welcome sheet still settles on a name.
+        if self.sheet == Some(Sheet::Welcome) {
+            return self.finish_welcome(None, cx);
+        }
         self.sheet = None;
         self.pending_import = None;
         self.menu = None;
@@ -863,7 +899,16 @@ impl Root {
             .find(|p| p.id == id)
             .and_then(|p| p.name.clone())
             .or_else(|| self.config.peer_names.get(&key).cloned())
-            .unwrap_or_else(|| format::short_id(&key))
+            .unwrap_or_else(|| self.shown_id(&key))
+    }
+
+    /// Short form of an ID for display, or a mask when IDs are hidden.
+    pub fn shown_id(&self, key: &str) -> String {
+        if self.prefs.hide_ids && !self.revealed_ids.contains(key) {
+            "••••••…••••".into()
+        } else {
+            format::short_id(key)
+        }
     }
 
     // ---- hosting ----
@@ -912,6 +957,9 @@ impl Root {
 
     pub fn save_display_name(&mut self, cx: &mut Context<Self>) {
         let name = non_empty(self.inputs.display_name.read(cx).text().trim().to_string());
+        if self.sheet == Some(Sheet::Welcome) {
+            return self.finish_welcome(name, cx);
+        }
         self.run_then(
             move |n| async move { n.set_display_name(name).await },
             |()| Msg::Info("Name saved".into()),
