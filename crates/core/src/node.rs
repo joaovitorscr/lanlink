@@ -424,7 +424,7 @@ impl Node {
         node.spawn(async move { n.announce_loop().await });
         node.sync_lan_listener();
         node.sync_dialers();
-        node.open_saved_tunnels().await;
+        node.open_saved_tunnels(node.config().saved_tunnels).await;
         Ok(node)
     }
 
@@ -923,8 +923,7 @@ impl Node {
 
     /// Reopen saved tunnels with `auto_open`. Listeners are bound right away; peers that are
     /// online get a short chance to tell us the service protocol first.
-    async fn open_saved_tunnels(&self) {
-        let saved = self.config().saved_tunnels;
+    pub(crate) async fn open_saved_tunnels(&self, saved: Vec<SavedTunnel>) {
         let mut set = JoinSet::new();
         for st in saved.into_iter().filter(|s| s.auto_open) {
             let Ok(peer) = st.peer.parse::<NodeId>() else {

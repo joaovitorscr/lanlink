@@ -15,6 +15,7 @@
 pub mod api;
 pub mod build_info;
 pub mod config;
+pub mod export;
 pub mod forward;
 pub mod instance;
 pub mod lan;
@@ -23,7 +24,8 @@ pub mod protocol;
 pub mod stats;
 
 pub use api::{
-    init_logging, LanWorld, LogGuard, NetworkStatus, PeerRequest, ServiceStatus, TunnelInfo,
+    init_logging, ImportOutcome, LanWorld, LogGuard, NetworkStatus, PeerRequest, ServiceStatus,
+    TunnelInfo,
 };
 pub use config::{Config, Protocol, SavedTunnel, Service};
 pub use iroh::{EndpointId as NodeId, SecretKey};
