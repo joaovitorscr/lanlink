@@ -2,7 +2,10 @@ use anyhow::Context;
 use clap::{Parser, Subcommand};
 use lanlink_core::export::{self, ImportMode};
 use lanlink_core::instance::InstanceLock;
-use lanlink_core::{Config, ConnState, Node, NodeEvent, NodeId, PeerInfo, Protocol, Service};
+use lanlink_core::{
+    Approval, Config, ConnState, InviteExpiry, JoinStatus, Network, NetworkColor, NetworkPolicy,
+    Node, NodeEvent, NodeId, PeerInfo, Protocol, Service,
+};
 use std::net::{IpAddr, SocketAddr};
 use std::path::PathBuf;
 use std::time::Duration;
@@ -75,6 +78,9 @@ enum Cmd {
         #[command(subcommand)]
         cmd: ConfigCmd,
     },
+    /// Networks: groups of friends who can reach each other's shared services.
+    #[command(subcommand)]
+    Network(NetCmd),
 }
 
 #[derive(Subcommand)]
@@ -92,6 +98,49 @@ enum ConfigCmd {
         #[arg(long)]
         merge: bool,
     },
+}
+
+/// A network is named by its name or id (a unique id prefix is enough).
+#[derive(Subcommand)]
+enum NetCmd {
+    /// Create a network you own and print its invite code.
+    Create {
+        name: String,
+        /// Ask me before anyone joins (default: anyone with the code joins at once).
+        #[arg(long)]
+        ask: bool,
+        /// When the code stops working: never, 1h, 24h, once.
+        #[arg(long, default_value = "never")]
+        expires: String,
+    },
+    /// List networks and their members.
+    List,
+    /// Print the invite code of a network you own (a new one with --new).
+    Invite {
+        network: String,
+        /// Make a new code; the old one stops working.
+        #[arg(long)]
+        new: bool,
+        #[arg(long)]
+        ask: bool,
+        #[arg(long, default_value = "never")]
+        expires: String,
+    },
+    /// Join a network with an invite code.
+    Join {
+        code: String,
+        /// Name shown to the owner and members. Default: your display name.
+        #[arg(long)]
+        name: Option<String>,
+    },
+    /// Approve someone who asked to join a network you own.
+    Approve { network: String, node_id: NodeId },
+    /// Leave a network.
+    Leave { network: String },
+    /// Remove a member from a network you own.
+    RemoveMember { network: String, node_id: NodeId },
+    /// Delete a network you own.
+    Delete { network: String },
 }
 
 #[tokio::main]
@@ -185,6 +234,7 @@ async fn main() -> anyhow::Result<()> {
             );
             println!("previous config saved to {}", backup.display());
         }
+        Cmd::Network(cmd) => network_cmd(cmd, config).await?,
         Cmd::Requests { secs } => {
             let node = Node::start(config).await?;
             println!("node id: {}", node.id());
@@ -209,7 +259,14 @@ async fn main() -> anyhow::Result<()> {
             } else {
                 println!("pending requests (accept with `lanlink accept <id> --name <name>`):");
                 for r in reqs {
-                    println!("{}  {}", r.id, r.name.as_deref().unwrap_or("-"));
+                    match &r.network {
+                        Some(net) => println!(
+                            "{}  {}  wants to join network {net} (`lanlink network approve`)",
+                            r.id,
+                            r.name.as_deref().unwrap_or("-")
+                        ),
+                        None => println!("{}  {}", r.id, r.name.as_deref().unwrap_or("-")),
+                    }
                 }
             }
             shutdown(node).await?;
@@ -267,6 +324,147 @@ async fn main() -> anyhow::Result<()> {
         }
     }
     Ok(())
+}
+
+fn parse_expiry(s: &str) -> anyhow::Result<InviteExpiry> {
+    Ok(match s {
+        "never" => InviteExpiry::Never,
+        "once" => InviteExpiry::FirstUse,
+        _ => match s.strip_suffix('h').and_then(|h| h.parse().ok()) {
+            Some(hours) => InviteExpiry::AfterHours { hours },
+            None => anyhow::bail!("--expires must be never, once, or hours like 24h"),
+        },
+    })
+}
+
+fn approval(ask: bool) -> Approval {
+    if ask {
+        Approval::AskMe
+    } else {
+        Approval::Auto
+    }
+}
+
+/// Find a network by exact id, name (any case), or unique id prefix.
+fn find_network(networks: &[Network], key: &str) -> anyhow::Result<Network> {
+    let by = |f: &dyn Fn(&Network) -> bool| -> Vec<&Network> {
+        networks.iter().filter(|n| f(n)).collect()
+    };
+    for found in [
+        by(&|n| n.id == key),
+        by(&|n| n.name.eq_ignore_ascii_case(key)),
+        by(&|n| n.id.starts_with(key)),
+    ] {
+        match found.as_slice() {
+            [n] => return Ok((*n).clone()),
+            [] => continue,
+            _ => anyhow::bail!("{key:?} matches several networks; use the id"),
+        }
+    }
+    anyhow::bail!("no network {key:?}; see `lanlink network list`")
+}
+
+async fn network_cmd(cmd: NetCmd, config: Config) -> anyhow::Result<()> {
+    if let NetCmd::List = cmd {
+        if config.networks.is_empty() {
+            println!("no networks");
+        }
+        for n in &config.networks {
+            let state = if n.pending {
+                " (waiting for approval)"
+            } else if n.leaving {
+                " (leaving)"
+            } else {
+                ""
+            };
+            println!("{}  {}{state}", n.id, n.name);
+            for m in &n.members {
+                let role = if m.id == n.owner { "  owner" } else { "" };
+                println!("    {}  {}{role}", m.id, m.name);
+            }
+            if let Some(code) = n.invite_code() {
+                println!("    invite: {code}");
+            }
+        }
+        return Ok(());
+    }
+    let node = Node::start(config).await?;
+    let res = async {
+        match cmd {
+            NetCmd::List => {}
+            NetCmd::Create { name, ask, expires } => {
+                let invite = (parse_expiry(&expires)?, approval(ask));
+                let n = node
+                    .create_network(
+                        &name,
+                        NetworkColor::default(),
+                        NetworkPolicy::default(),
+                        Some(invite),
+                    )
+                    .await?;
+                println!("created {} ({})", n.name, n.id);
+                println!("invite code: {}", n.invite_code().unwrap_or_default());
+            }
+            NetCmd::Invite {
+                network,
+                new,
+                ask,
+                expires,
+            } => {
+                let n = find_network(&node.networks(), &network)?;
+                let code = match n.invite_code() {
+                    Some(code) if !new => code,
+                    _ => {
+                        node.create_invite(&n.id, parse_expiry(&expires)?, approval(ask))
+                            .await?
+                    }
+                };
+                println!("{code}");
+            }
+            NetCmd::Join { code, name } => match node.join_network(&code, name).await? {
+                JoinStatus::Pending => println!(
+                    "asked to join; the owner has to approve you. You are let in the next time \
+                     lanlink runs here while they are online."
+                ),
+                _ => println!("joined"),
+            },
+            NetCmd::Approve { network, node_id } => {
+                let n = find_network(&node.networks(), &network)?;
+                node.respond_join(&n.id, node_id, true).await?;
+                println!("{node_id} is now in {}", n.name);
+            }
+            NetCmd::Leave { network } => {
+                let n = find_network(&node.networks(), &network)?;
+                node.leave_network(&n.id).await?;
+                // Give the owner a moment to confirm; otherwise it is told later.
+                let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
+                while tokio::time::Instant::now() < deadline
+                    && node.networks().iter().any(|x| x.id == n.id)
+                {
+                    tokio::time::sleep(Duration::from_millis(200)).await;
+                }
+                if node.networks().iter().any(|x| x.id == n.id) {
+                    println!("left {}; the owner is told when it is next online", n.name);
+                } else {
+                    println!("left {}", n.name);
+                }
+            }
+            NetCmd::RemoveMember { network, node_id } => {
+                let n = find_network(&node.networks(), &network)?;
+                node.remove_member(&n.id, node_id).await?;
+                println!("removed {node_id} from {}", n.name);
+            }
+            NetCmd::Delete { network } => {
+                let n = find_network(&node.networks(), &network)?;
+                node.delete_network(&n.id).await?;
+                println!("deleted {}", n.name);
+            }
+        }
+        anyhow::Ok(())
+    }
+    .await;
+    shutdown(node).await?;
+    res
 }
 
 async fn run_until_ctrl_c(
@@ -363,6 +561,8 @@ fn print_event(ev: &NodeEvent) {
             r.id,
             r.id
         ),
-        NodeEvent::NetworkChanged(_) | NodeEvent::LanWorldsChanged(_) => {}
+        NodeEvent::NetworkChanged(_)
+        | NodeEvent::LanWorldsChanged(_)
+        | NodeEvent::NetworksChanged => {}
     }
 }

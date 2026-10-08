@@ -32,7 +32,9 @@ const EVENT_CAPACITY: usize = 64;
 const CLOSE_NOT_ALLOWED: u32 = 1;
 const CLOSE_SHUTDOWN: u32 = 2;
 /// We do not know the dialer yet; it was recorded as a connection request.
-const CLOSE_PENDING: u32 = 3;
+pub(crate) const CLOSE_PENDING: u32 = 3;
+/// A join request was answered.
+pub(crate) const CLOSE_JOINED: u32 = 4;
 /// Data stream reset codes (host -> client).
 const RESET_UNKNOWN_SERVICE: u32 = 1;
 /// The host could not connect to the local service (nothing listening there).
@@ -40,8 +42,8 @@ const RESET_NOT_LISTENING: u32 = 2;
 /// At most one "nothing is listening" error per tunnel in this window.
 const NOT_LISTENING_REPORT_GAP: Duration = Duration::from_secs(60);
 
-const DIAL_TIMEOUT: Duration = Duration::from_secs(10);
-const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
+pub(crate) const DIAL_TIMEOUT: Duration = Duration::from_secs(10);
+pub(crate) const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
 const HELLO_TIMEOUT: Duration = Duration::from_secs(5);
 const BACKOFF_MIN: Duration = Duration::from_secs(2);
 const BACKOFF_MAX: Duration = Duration::from_secs(30);
@@ -103,6 +105,9 @@ pub enum NodeEvent {
     NetworkChanged(crate::NetworkStatus),
     /// The set of Minecraft "Open to LAN" worlds seen on this machine changed.
     LanWorldsChanged(Vec<crate::LanWorld>),
+    /// `Config::networks` changed (a join, a push from an owner, a local edit). Re-read
+    /// `Node::config()`.
+    NetworksChanged,
 }
 
 /// The running lanlink node. Cheap to clone (Arc inside).
@@ -111,7 +116,7 @@ pub struct Node {
     pub(crate) inner: Arc<Inner>,
 }
 
-type ControlSend = Arc<tokio::sync::Mutex<SendStream>>;
+pub(crate) type ControlSend = Arc<tokio::sync::Mutex<SendStream>>;
 
 pub(crate) struct PeerEntry {
     pub(crate) info: PeerInfo,
@@ -120,7 +125,7 @@ pub(crate) struct PeerEntry {
     /// Connections the peer dialed to us.
     inbound: Vec<Connection>,
     /// Control stream senders of every live connection, keyed by connection stable id.
-    controls: Vec<(usize, ControlSend)>,
+    pub(crate) controls: Vec<(usize, ControlSend)>,
     /// Client UDP flows on the dialed connection, keyed by flow id.
     udp: HashMap<u32, (Arc<ClientFlow>, Arc<TunnelLive>)>,
     /// Recent ping samples backing `info.stats`.
@@ -262,7 +267,7 @@ fn is_rejection(conn: &Connection) -> bool {
 }
 
 /// Untrusted names from the network: printable, trimmed, bounded.
-fn sanitize_name(name: Option<String>) -> Option<String> {
+pub(crate) fn sanitize_name(name: Option<String>) -> Option<String> {
     let name: String = name?.chars().filter(|c| !c.is_control()).take(64).collect();
     let name = name.trim().to_string();
     (!name.is_empty()).then_some(name)
@@ -467,15 +472,12 @@ impl Node {
             .iter()
             .map(|(k, v)| (*k, v.info.clone()))
             .collect();
-        let config = self.config();
-        for s in &config.allowed_peers {
-            if let Ok(id) = s.parse::<NodeId>() {
-                map.entry(id).or_insert_with(|| {
-                    let mut info = new_peer_entry(id).info;
-                    info.name = config.peer_names.get(s).cloned();
-                    info
-                });
-            }
+        for id in self.dial_set() {
+            map.entry(id).or_insert_with(|| {
+                let mut info = new_peer_entry(id).info;
+                info.name = self.peer_name(&id);
+                info
+            });
         }
         let mut v: Vec<PeerInfo> = map.into_values().collect();
         for p in &mut v {
@@ -563,7 +565,7 @@ impl Node {
         let _ = self.inner.events.send(ev);
     }
 
-    fn spawn<F>(&self, fut: F)
+    pub(crate) fn spawn<F>(&self, fut: F)
     where
         F: std::future::Future<Output = ()> + Send + 'static,
     {
@@ -572,25 +574,23 @@ impl Node {
         tasks.push(tokio::spawn(fut).abort_handle());
     }
 
+    /// May connect to us: in `allowed_peers`, a member of one of our networks, or the owner
+    /// of a network we wait to join or are leaving.
     pub(crate) fn is_allowed(&self, id: &NodeId) -> bool {
-        let s = id.to_string();
-        self.inner
-            .config
-            .read()
-            .unwrap()
-            .allowed_peers
-            .iter()
-            .any(|a| a == &s)
+        crate::membership::allowed(&self.inner.config.read().unwrap(), &self.id(), id, false)
     }
 
+    /// Local name for a peer, else the name it has in one of our networks.
     fn peer_name(&self, id: &NodeId) -> Option<String> {
-        self.inner
-            .config
-            .read()
-            .unwrap()
-            .peer_names
-            .get(&id.to_string())
-            .cloned()
+        let c = self.inner.config.read().unwrap();
+        let key = id.to_string();
+        c.peer_names.get(&key).cloned().or_else(|| {
+            c.networks
+                .iter()
+                .flat_map(|n| &n.members)
+                .find(|m| m.id == key && !m.name.trim().is_empty())
+                .map(|m| m.name.clone())
+        })
     }
 
     /// Best human label for a peer: local name, else the name it sent, else short id.
@@ -624,12 +624,26 @@ impl Node {
     /// The disk write happens outside the config lock so readers (the accept path, the UI)
     /// never wait on it; `config_edit` keeps concurrent edits from interleaving.
     pub(crate) fn edit_config(&self, f: impl FnOnce(&mut Config)) -> anyhow::Result<()> {
+        self.edit_config_if(|c| {
+            f(c);
+            true
+        })
+        .map(|_| ())
+    }
+
+    /// Like `edit_config`, but nothing is saved when `f` returns false. Returns whether it saved.
+    pub(crate) fn edit_config_if(
+        &self,
+        f: impl FnOnce(&mut Config) -> bool,
+    ) -> anyhow::Result<bool> {
         let _edit = self.inner.config_edit.lock().unwrap();
         let mut new = self.inner.config.read().unwrap().clone();
-        f(&mut new);
+        if !f(&mut new) {
+            return Ok(false);
+        }
         new.save()?;
         *self.inner.config.write().unwrap() = new;
-        Ok(())
+        Ok(true)
     }
 
     /// Start or stop the Minecraft LAN listener to match `disable_lan_detection`.
@@ -685,7 +699,7 @@ impl Node {
     }
 
     /// Like `update_peer` but does nothing if the peer has no entry (e.g. it was removed).
-    fn update_existing_peer(&self, id: NodeId, f: impl FnOnce(&mut PeerEntry)) {
+    pub(crate) fn update_existing_peer(&self, id: NodeId, f: impl FnOnce(&mut PeerEntry)) {
         self.update_peer_inner(id, false, f)
     }
 
@@ -755,17 +769,10 @@ impl Node {
         }
     }
 
-    /// Services we advertise: enabled ones, in config order. UDP indexes refer to this list.
-    pub(crate) fn advertised_services(&self) -> Vec<Service> {
-        self.inner
-            .config
-            .read()
-            .unwrap()
-            .services
-            .iter()
-            .filter(|s| s.enabled)
-            .cloned()
-            .collect()
+    /// Services `peer` may use: enabled ones it can see (see `Service::networks`), in config
+    /// order. UDP indexes from that peer refer to this list.
+    pub(crate) fn services_for(&self, peer: &NodeId) -> Vec<Service> {
+        crate::membership::visible_services(&self.inner.config.read().unwrap(), &self.id(), peer)
     }
 
     /// Port to forward to: a detected Minecraft LAN world's port when exactly one is seen.
@@ -793,19 +800,19 @@ impl Node {
     /// Send the current service list to every connected peer.
     pub(crate) fn push_services(&self) {
         self.inner.svc_gen.fetch_add(1, Ordering::SeqCst);
-        let services = self.advertised_services();
-        let controls: Vec<ControlSend> = self
+        let controls: Vec<(NodeId, Vec<ControlSend>)> = self
             .inner
             .peers
             .lock()
             .unwrap()
-            .values()
-            .flat_map(|e| e.controls.iter().map(|(_, s)| s.clone()))
+            .iter()
+            .map(|(id, e)| (*id, e.controls.iter().map(|(_, s)| s.clone()).collect()))
             .collect();
-        for send in controls {
-            let msg = ControlMsg::Services {
-                services: services.clone(),
-            };
+        for (send, services) in controls.into_iter().flat_map(|(id, sends)| {
+            let services = self.services_for(&id);
+            sends.into_iter().map(move |s| (s, services.clone()))
+        }) {
+            let msg = ControlMsg::Services { services };
             tokio::spawn(async move {
                 if let Err(e) = write_msg(&mut *send.lock().await, &msg).await {
                     tracing::debug!("pushing services: {e:#}");
@@ -815,10 +822,10 @@ impl Node {
     }
 
     /// A push that ran while a handshake was in flight missed that connection; send it now.
-    fn resend_services_if_changed(&self, gen: u64, send: &ControlSend) {
+    fn resend_services_if_changed(&self, peer: &NodeId, gen: u64, send: &ControlSend) {
         if self.inner.svc_gen.load(Ordering::SeqCst) != gen {
             let msg = ControlMsg::Services {
-                services: self.advertised_services(),
+                services: self.services_for(peer),
             };
             let send = send.clone();
             tokio::spawn(async move {
@@ -1040,6 +1047,9 @@ impl Node {
             Err(_) => anyhow::anyhow!("timed out"),
         };
         let who = self.peer_label(&peer);
+        if err.is::<NotAccepted>() {
+            self.owner_rejected(peer);
+        }
         let msg = if err.is::<NotAccepted>() {
             format!("Waiting for {who} to accept your request")
         } else if err.to_string() == "timed out" {
@@ -1075,7 +1085,7 @@ impl Node {
             write_msg(
                 &mut send,
                 &ControlMsg::Services {
-                    services: self.advertised_services(),
+                    services: self.services_for(&peer),
                 },
             )
             .await?;
@@ -1110,7 +1120,8 @@ impl Node {
             }
         });
 
-        self.resend_services_if_changed(gen, &send);
+        self.resend_services_if_changed(&peer, gen, &send);
+        self.send_network_sync(peer, &send);
         let n = self.clone();
         let c = conn.clone();
         self.spawn(async move { n.run_connection(c, send, recv, true).await });
@@ -1125,19 +1136,14 @@ impl Node {
 
     /// Start reconnect loops for allowed peers and stop loops of peers no longer allowed.
     pub(crate) fn sync_dialers(&self) {
-        let allowed: Vec<NodeId> = self
-            .config()
-            .allowed_peers
-            .iter()
-            .filter_map(|s| s.parse().ok())
-            .collect();
+        let allowed = self.dial_set();
         let stale: Vec<NodeId> = self
             .inner
             .dialers
             .lock()
             .unwrap()
             .keys()
-            .filter(|id| !allowed.contains(id))
+            .filter(|id| !allowed.contains(*id))
             .copied()
             .collect();
         for id in stale {
@@ -1223,15 +1229,52 @@ impl Node {
     async fn handle_incoming(self, incoming: iroh::endpoint::Incoming) -> anyhow::Result<()> {
         let conn = incoming.accept()?.await?;
         let peer = conn.remote_id();
-        if !self.is_allowed(&peer) {
-            self.handle_unknown(conn).await;
+        let allowed = self.is_allowed(&peer);
+        // Peers that are not allowed only get to send one message: a JoinRequest is handled,
+        // anything else becomes a connection request.
+        let limit = if allowed {
+            HANDSHAKE_TIMEOUT
+        } else {
+            HELLO_TIMEOUT
+        };
+        let first = tokio::time::timeout(limit, async {
+            let (send, mut recv) = conn.accept_bi().await?;
+            let first: ControlMsg = read_msg(&mut recv).await?;
+            anyhow::Ok((send, recv, first))
+        })
+        .await;
+        let (mut send, mut recv, first) = match first {
+            Ok(Ok(x)) => x,
+            _ if !allowed => {
+                conn.close(CLOSE_PENDING.into(), b"pending");
+                self.record_request(peer, None);
+                return Ok(());
+            }
+            Ok(Err(e)) => return Err(e),
+            Err(_) => bail!("handshake timed out"),
+        };
+        let name = match first {
+            ControlMsg::JoinRequest {
+                network,
+                token,
+                name,
+            } => {
+                self.handle_join(conn, send, network, token, name).await;
+                return Ok(());
+            }
+            ControlMsg::Hello { name } => sanitize_name(name),
+            other if allowed => bail!("expected Hello, got {other:?}"),
+            _ => None,
+        };
+        if !allowed {
+            conn.close(CLOSE_PENDING.into(), b"pending");
+            self.record_request(peer, name);
             return Ok(());
         }
         tracing::info!(%peer, "accepted connection");
         let gen = self.inner.svc_gen.load(Ordering::SeqCst);
-        let (send, recv, name, services) = tokio::time::timeout(HANDSHAKE_TIMEOUT, async {
-            let (mut send, mut recv) = conn.accept_bi().await?;
-            let (name, services) = handshake_read(&mut recv).await?;
+        let services = tokio::time::timeout(HANDSHAKE_TIMEOUT, async {
+            let services = read_services(&mut recv).await?;
             write_msg(
                 &mut send,
                 &ControlMsg::Hello {
@@ -1242,11 +1285,11 @@ impl Node {
             write_msg(
                 &mut send,
                 &ControlMsg::Services {
-                    services: self.advertised_services(),
+                    services: self.services_for(&peer),
                 },
             )
             .await?;
-            anyhow::Ok((send, recv, name, services))
+            anyhow::Ok(services)
         })
         .await
         .context("handshake timed out")??;
@@ -1267,7 +1310,8 @@ impl Node {
                 e.remote_name = name;
             }
         });
-        self.resend_services_if_changed(gen, &send);
+        self.resend_services_if_changed(&peer, gen, &send);
+        self.send_network_sync(peer, &send);
         // They can reach us, so our own dial to them will likely work now too.
         if self.live_dialed(&peer).is_none() {
             self.wake_dialer(peer);
@@ -1277,10 +1321,9 @@ impl Node {
         Ok(())
     }
 
-    /// A peer not in the allowlist connected: record it as a request and close.
+    /// A peer that may not connect said hello: show it as a connection request.
     /// It never gets access to any service.
-    async fn handle_unknown(&self, conn: Connection) {
-        let peer = conn.remote_id();
+    fn record_request(&self, peer: NodeId, name: Option<String>) {
         let recent = {
             let mut seen = self.inner.request_seen.lock().unwrap();
             seen.retain(|_, at| at.elapsed() < REQUEST_TTL);
@@ -1293,27 +1336,14 @@ impl Node {
             recent
         };
         if recent {
-            conn.close(CLOSE_PENDING.into(), b"pending");
             return;
         }
-        let name = tokio::time::timeout(HELLO_TIMEOUT, async {
-            let (_send, mut recv) = conn.accept_bi().await?;
-            match read_msg(&mut recv).await? {
-                ControlMsg::Hello { name } => anyhow::Ok(name),
-                _ => anyhow::Ok(None),
-            }
-        })
-        .await
-        .ok()
-        .and_then(|r| r.ok())
-        .flatten();
-        conn.close(CLOSE_PENDING.into(), b"pending");
-        let name = sanitize_name(name);
         tracing::info!(%peer, ?name, "connection request from unknown peer");
         let req = PeerRequest {
             id: peer,
             name,
             at: SystemTime::now(),
+            network: None,
         };
         {
             let mut reqs = self.inner.requests.lock().unwrap();
@@ -1373,7 +1403,18 @@ impl Node {
                         ControlMsg::Services { services } => {
                             n.update_existing_peer(peer, |e| e.info.services = services)
                         }
-                        ControlMsg::Hello { .. } => {}
+                        ControlMsg::NetworkState { network } => {
+                            n.apply_network_state(peer, network)
+                        }
+                        ControlMsg::Networks { networks } => n.apply_network_sync(peer, networks),
+                        ControlMsg::NetworkLeave { network } => {
+                            let n = n.clone();
+                            tokio::spawn(async move { n.handle_leave(peer, &network).await });
+                        }
+                        // Only valid as the first message of a connection.
+                        ControlMsg::Hello { .. }
+                        | ControlMsg::JoinRequest { .. }
+                        | ControlMsg::JoinResponse { .. } => {}
                         ControlMsg::Unknown => {
                             tracing::debug!(%peer, "ignoring unknown control message");
                         }
@@ -1536,7 +1577,7 @@ impl Node {
             .await
             .context("stream header timed out")??;
         let svc = self
-            .advertised_services()
+            .services_for(&peer)
             .into_iter()
             .find(|s| s.name == header.service && s.protocol == Protocol::Tcp);
         let Some(svc) = svc else {
@@ -1617,7 +1658,7 @@ impl Node {
             let flow = match flows.get(&key) {
                 Some(f) => f,
                 None => {
-                    let svc = self.advertised_services().get(h.service as usize).cloned();
+                    let svc = self.services_for(&peer).get(h.service as usize).cloned();
                     let Some(svc) = svc.filter(|s| s.protocol == Protocol::Udp) else {
                         tracing::debug!(%peer, idx = h.service, "datagram for unknown udp service");
                         continue;
@@ -2062,8 +2103,12 @@ async fn handshake_read(recv: &mut RecvStream) -> anyhow::Result<(Option<String>
         ControlMsg::Hello { name } => sanitize_name(name),
         other => bail!("expected Hello, got {other:?}"),
     };
+    Ok((name, read_services(recv).await?))
+}
+
+async fn read_services(recv: &mut RecvStream) -> anyhow::Result<Vec<Service>> {
     match read_msg(recv).await? {
-        ControlMsg::Services { services } => Ok((name, services)),
+        ControlMsg::Services { services } => Ok(services),
         other => bail!("expected Services, got {other:?}"),
     }
 }

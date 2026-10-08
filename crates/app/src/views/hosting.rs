@@ -20,7 +20,7 @@ impl Root {
             .child(pane_header(
                 &t,
                 "Hosting",
-                "Services on this computer that your peers can reach. Games, servers, anything that listens on a port.",
+                "Services on this computer that your peers can reach. Games, servers, anything that listens on a port. Use ⋯ to choose which networks see a service.",
             ))
             .when(!worlds.is_empty(), |el| {
                 let nw = worlds.len();
@@ -114,6 +114,17 @@ impl Root {
             ));
         } else if svc.enabled {
             parts.push("nobody connected".into());
+        }
+        if !svc.networks.is_empty() {
+            let names: Vec<String> = svc
+                .networks
+                .iter()
+                .map(|id| {
+                    self.network(id)
+                        .map_or("a network you left".into(), |n| n.name.clone())
+                })
+                .collect();
+            parts.push(format!("only {}", names.join(", ")));
         }
         if let Some(st) = status {
             parts.push(st);

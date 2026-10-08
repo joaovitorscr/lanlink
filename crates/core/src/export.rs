@@ -151,6 +151,12 @@ pub(crate) fn validate(c: &Config) -> anyhow::Result<()> {
             .parse::<NodeId>()
             .with_context(|| format!("saved tunnel {:?} has an invalid peer id", t.service))?;
     }
+    for n in &c.networks {
+        anyhow::ensure!(!n.id.trim().is_empty(), "network {:?} has no id", n.name);
+        n.owner
+            .parse::<NodeId>()
+            .with_context(|| format!("network {:?} has an invalid owner id", n.name))?;
+    }
     if let Some(u) = &c.relay_url {
         u.parse::<iroh::RelayUrl>()
             .with_context(|| format!("invalid relay url {u}"))?;
@@ -166,9 +172,8 @@ impl Import {
             tunnels: self.config.saved_tunnels.len(),
             networks: self
                 .raw
-                .get("networks")
-                .and_then(|n| n.as_array())
-                .map(Vec::len),
+                .contains_key("networks")
+                .then_some(self.config.networks.len()),
         }
     }
 
@@ -194,6 +199,7 @@ impl Import {
             saved_tunnels,
             disable_lan_detection,
             latency_log,
+            networks,
         } = self.config.clone();
         let mut out = current.clone();
         for p in allowed_peers {
@@ -216,6 +222,12 @@ impl Import {
             {
                 Some(x) => *x = t,
                 None => out.saved_tunnels.push(t),
+            }
+        }
+        for n in networks {
+            match out.networks.iter_mut().find(|x| x.id == n.id) {
+                Some(x) => *x = n,
+                None => out.networks.push(n),
             }
         }
         if relay_url.is_some() {
@@ -407,6 +419,27 @@ mod tests {
     }
 
     #[test]
+    fn merge_unions_networks_by_id() {
+        let owner = SecretKey::generate().public();
+        let net = |name: &str| crate::Network::new(name, owner, "o");
+        let (mut shared, mine, theirs) = (net("old name"), net("mine"), net("theirs"));
+        let current = Config {
+            networks: vec![shared.clone(), mine.clone()],
+            ..Default::default()
+        };
+        shared.name = "new name".into();
+        let file = Config {
+            networks: vec![shared.clone(), theirs.clone()],
+            ..Default::default()
+        };
+        let imp = parse(export(&file).as_bytes()).unwrap();
+        assert_eq!(imp.summary().networks, Some(2));
+        let out = imp.resolve(&current, ImportMode::Merge);
+        let names: Vec<&str> = out.networks.iter().map(|n| n.name.as_str()).collect();
+        assert_eq!(names, ["new name", "mine", "theirs"]);
+    }
+
+    #[test]
     fn merge_takes_set_scalars() {
         let current = Config {
             display_name: Some("here".into()),
@@ -424,7 +457,13 @@ mod tests {
 
     #[test]
     fn counts_networks_when_present() {
-        let imp = parse(envelope(r#"{"allowed_peers":[],"networks":[{},{}]}"#).as_bytes()).unwrap();
+        let net = |nid: &str| format!(r#"{{"id":"{nid}","name":"n","owner":"{}"}}"#, id());
+        let text = envelope(&format!(
+            r#"{{"allowed_peers":[],"networks":[{},{}]}}"#,
+            net("a"),
+            net("b")
+        ));
+        let imp = parse(text.as_bytes()).unwrap();
         assert_eq!(imp.summary().networks, Some(2));
         assert_eq!(
             imp.summary().describe(),

@@ -1,3 +1,4 @@
+use crate::network::Network;
 use anyhow::Context;
 use serde::{Deserialize, Serialize};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
@@ -30,6 +31,11 @@ pub struct Service {
     /// Client: tunnels to it are announced on the local LAN so the world shows in Multiplayer.
     #[serde(default)]
     pub minecraft_lan: bool,
+    /// Network ids this service is shared with. Empty = every allowed peer (direct peers and
+    /// members of any of our networks). Otherwise only members of these networks see it.
+    /// In a service list sent to a peer it holds the networks shared with that peer.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub networks: Vec<String>,
 }
 
 impl Service {
@@ -41,6 +47,7 @@ impl Service {
             host: None,
             enabled: true,
             minecraft_lan: false,
+            networks: Vec::new(),
         }
     }
 
@@ -100,6 +107,9 @@ pub struct Config {
     /// Append every ping sample to daily `latency.<date>.csv` files in the logs dir (7 kept).
     #[serde(default)]
     pub latency_log: bool,
+    /// Networks we own or belong to. See [`crate::network`].
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub networks: Vec<Network>,
 }
 
 impl Config {
@@ -158,8 +168,12 @@ mod tests {
             serde_json::from_str(r#"{"name":"mc","protocol":"tcp","port":25565}"#).unwrap();
         assert_eq!(svc.host, None);
         assert_eq!(svc.local_addr(svc.port), "127.0.0.1:25565".parse().unwrap());
-        // Old configs keep their exact shape when no host is set.
-        assert!(!serde_json::to_string(&svc).unwrap().contains("host"));
+        // Old configs keep their exact shape when no host or networks are set.
+        let json = serde_json::to_string(&svc).unwrap();
+        assert!(
+            !json.contains("host") && !json.contains("networks"),
+            "{json}"
+        );
     }
 
     #[test]
@@ -169,5 +183,13 @@ mod tests {
         let back: Service = serde_json::from_str(&serde_json::to_string(&svc).unwrap()).unwrap();
         assert_eq!(back, svc);
         assert_eq!(back.local_addr(25565), "[::1]:25565".parse().unwrap());
+    }
+
+    #[test]
+    fn old_config_keeps_its_shape() {
+        let old = r#"{"allowed_peers":["a"],"peer_names":{},"services":[],"relay_url":null,"display_name":null,"saved_tunnels":[],"disable_lan_detection":false,"latency_log":false}"#;
+        let c: Config = serde_json::from_str(old).unwrap();
+        assert!(c.networks.is_empty());
+        assert_eq!(serde_json::to_string(&c).unwrap(), old);
     }
 }

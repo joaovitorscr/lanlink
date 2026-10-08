@@ -8,20 +8,22 @@
 use crate::node::NodeEvent;
 use crate::{ActiveTunnel, Config, Node, NodeId, Protocol, SavedTunnel, Service};
 use anyhow::Context;
-use std::collections::HashSet;
 use std::net::{Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
 use std::sync::atomic::Ordering;
 use std::time::SystemTime;
 
-/// An unknown peer tried to connect to us.
+/// An unknown peer tried to connect to us, or someone used an "ask me" invite code to one
+/// of our networks.
 #[derive(Debug, Clone)]
 pub struct PeerRequest {
     pub id: NodeId,
-    /// Name the peer sent in Hello, if any. Untrusted, display only.
+    /// Name the peer sent in Hello or JoinRequest, if any. Untrusted, display only.
     pub name: Option<String>,
     /// Most recent attempt.
     pub at: SystemTime,
+    /// Join request: id of the network they want to join. None for a connection request.
+    pub network: Option<String>,
 }
 
 /// Our own connectivity.
@@ -183,6 +185,8 @@ impl Node {
             c.saved_tunnels.retain(|t| t.peer != key);
         })?;
         self.deactivate_peer(id);
+        // Still a member of one of our networks: keep connecting.
+        self.sync_dialers();
         Ok(())
     }
 
@@ -223,7 +227,7 @@ impl Node {
 
     /// Dial now, resetting the auto-reconnect backoff.
     pub async fn reconnect(&self, id: NodeId) -> anyhow::Result<()> {
-        if self.is_allowed(&id) {
+        if self.dial_set().contains(&id) {
             self.start_dialer(id);
             self.wake_dialer(id);
             Ok(())
@@ -232,21 +236,34 @@ impl Node {
         }
     }
 
-    /// Unknown peers that tried to connect recently (deduped by id, newest first, at most 20,
-    /// entries expire after 10 minutes).
+    /// Join requests to our networks (oldest first, kept until answered), then unknown peers
+    /// that tried to connect recently (deduped by id, newest first, at most 20, entries
+    /// expire after 10 minutes).
     pub fn pending_requests(&self) -> Vec<PeerRequest> {
+        let mut out = self.join_requests();
         let mut reqs = self.inner.requests.lock().unwrap();
         reqs.retain(|(_, at)| at.elapsed() < REQUEST_TTL);
-        reqs.iter().map(|(r, _)| r.clone()).collect()
+        out.extend(reqs.iter().map(|(r, _)| r.clone()));
+        out
     }
 
     /// Allow = `add_peer(id, name)`. Deny = drop the request; it may come back if they retry.
+    /// For a peer with a join request this answers the join request instead
+    /// (see `respond_join`).
     pub async fn respond_request(
         &self,
         id: NodeId,
         allow: bool,
         name: Option<String>,
     ) -> anyhow::Result<()> {
+        if let Some(network) = self
+            .join_requests()
+            .into_iter()
+            .find(|r| r.id == id)
+            .and_then(|r| r.network)
+        {
+            return self.respond_join(&network, id, allow).await;
+        }
         if allow {
             let name = name.or_else(|| {
                 self.inner
@@ -322,13 +339,9 @@ impl Node {
         let old = self.config();
         let backup = old.save_backup()?;
 
-        let ids = |c: &Config| -> HashSet<NodeId> {
-            c.allowed_peers
-                .iter()
-                .filter_map(|p| p.parse().ok())
-                .collect()
-        };
-        let (old_ids, new_ids) = (ids(&old), ids(&new));
+        // Access comes from allowed_peers and from network membership.
+        let old_ids = self.allowed_set();
+        let new_ids = crate::membership::peer_set(&new, &self.id(), false);
         let removed: Vec<NodeId> = old_ids.difference(&new_ids).copied().collect();
         for &id in &removed {
             self.stop_dialer(id);
@@ -339,13 +352,18 @@ impl Node {
         for id in removed {
             self.deactivate_peer(id);
         }
+        let dial = self.dial_set();
         for &id in &new_ids {
             if old_ids.contains(&id) {
                 // Picks up a changed local name.
                 self.update_peer(id, |_| {});
-            } else {
+            } else if dial.contains(&id) {
                 self.activate_peer(id);
             }
+        }
+        self.sync_dialers();
+        if old.networks != new.networks {
+            self.emit(NodeEvent::NetworksChanged);
         }
 
         // Hosted services.
@@ -354,7 +372,7 @@ impl Node {
                 self.close_service_streams(&s.name);
             }
         }
-        if old.services != new.services {
+        if old.services != new.services || old_ids != new_ids || old.networks != new.networks {
             self.push_services();
         }
 

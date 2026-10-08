@@ -62,7 +62,7 @@ Connections are end-to-end encrypted, and only people you have allowed can conne
 
 ### Identity
 
-On first start lanlink generates an Ed25519 key pair and saves the secret key as `identity.key` in the config folder. The public key is your **ID**, the long string you copy from the Peers tab and send to friends. There is no account or central user list. Your ID is the only way to reach you, and it stays the same until you delete `identity.key`.
+On first start lanlink generates an Ed25519 key pair and saves the secret key as `identity.key` in the config folder. The public key is your **ID**, the long string you copy from the Networks tab and send to friends. There is no account or central user list. Your ID is the only way to reach you, and it stays the same until you delete `identity.key`.
 
 ### Transport
 
@@ -76,7 +76,15 @@ Every connection starts with a handshake on the first QUIC stream. Both sides se
 
 When a connection arrives from an ID that isn't on your allowlist, lanlink reads only its `Hello` to learn the name, closes the connection, and shows a request with **Allow** and **Ignore** buttons. The unknown peer never sees your services and can't open streams to them. Requests are kept for 10 minutes, at most 20 at a time.
 
-Allowing a peer adds their ID to `allowed_peers` in your config. lanlink then connects to every allowed peer in the background and reconnects with backoff (2 to 30 seconds) when a connection drops or the network changes.
+Allowing a peer adds their ID to `allowed_peers` in your config. Members of a network you are in are allowed too, without being added to that list. lanlink connects to every allowed peer in the background and reconnects with backoff (2 to 30 seconds) when a connection drops or the network changes.
+
+Each side only sends the services the other may see. A service shared with everyone goes to direct peers and to members of all your networks. A service shared with some networks goes only to members of those networks.
+
+### Networks
+
+A network has an owner, and the owner's computer holds the member list. There is no directory server. Members keep a copy in their config so the list shows while the owner is offline, but they only accept changes that come from the owner.
+
+An invite code is `lanlink-` followed by base32 of the owner's ID, the network ID, a random 80-bit token and a checksum. The joiner dials the owner and sends `JoinRequest` as its first message. This is the one message lanlink reads from a peer that isn't allowed yet. The owner checks the token and answers `JoinResponse`. With *Ask me first* the answer is "pending", and when the owner approves, their computer connects to the joiner to let them in. Every change to the member list is pushed to the members, who connect to new members and drop the ones that were removed.
 
 ### Control protocol
 
@@ -87,6 +95,12 @@ The first stream of each connection stays open as a control channel. Messages ar
 | `Hello` | Display name, sent first. |
 | `Services` | Your shared services: name, protocol, port and options. Sent again whenever the list changes. |
 | `Ping`, `Pong` | Sent every second by the side that dialed. The round trip gives the latency and jitter shown in the app. |
+| `JoinRequest`, `JoinResponse` | Joining a network with an invite code: the joiner's first message, and the owner's answer (approved, pending or rejected). The connection then closes. |
+| `NetworkState` | Owner to members: the current name and member list of one network, after every change. A member that is no longer listed drops the network. |
+| `Networks` | Sent after the handshake: every network the sender owns that the receiver is in. A member drops cached networks of that owner that are missing (removed while offline). |
+| `NetworkLeave` | Member to owner: remove me. Repeated after the next handshake if the owner was offline. |
+
+Network messages are only accepted from the network's owner, whose ID the TLS handshake proves.
 
 The protocol is forward compatible. Unknown fields are ignored, and a message type a build doesn't know is read as `Unknown` and skipped. A newer lanlink can add messages and fields without breaking older ones. The ALPN identifier is `lanlink/1` and only changes for incompatible protocol changes.
 
@@ -162,14 +176,14 @@ After the first launch it opens normally.
 
 ## Using lanlink
 
-The app has four tabs. **Peers** holds your ID and your friends. **Hosting** lists what you share. **Tunnels** lists what your friends share with you. **Settings** has everything else.
+The app has four tabs. **Networks** holds your networks, friends you added directly, and your ID. **Hosting** lists what you share. **Tunnels** lists what your friends share with you. **Settings** has everything else.
 
-Adding someone works in both directions. Each person adds the other, or allows the other when a request comes in. After that, either of you can share games and the other can join them.
+There are two ways to play with friends. A [network](#networks-1) is a group: one invite code and everyone in it can reach what the others share. Or add a friend directly by ID, which works in both directions: each person adds the other, or allows the other when a request comes in.
 
 ### Hosting a game
 
-1. Open lanlink. In the **Peers** tab, click **Copy** next to your ID and send it to your friend (Discord, WhatsApp, anything).
-2. When your friend adds you, a request with their name appears in the Peers tab. Click **Allow**.
+1. Open lanlink. Either create a network (**New Network**) and send your friend its invite code, or click **Copy my ID** and send them your ID (Discord, WhatsApp, anything).
+2. When your friend joins or adds you, a request with their name may appear in the Networks tab. Click **Allow**.
 3. Start Minecraft and open your world to LAN (Esc > *Open to LAN*).
 4. Open the **Hosting** tab. Under **Detected**, click **Share** next to your world.
 
@@ -179,13 +193,21 @@ The Hosting tab warns "Nothing is listening on this port" when the game isn't ru
 
 ### Joining a game
 
-1. Open lanlink and click **Add Peer**. Paste your friend's ID, give them a name if you like, and click **Add**.
-2. Wait for your friend to click **Allow**. The Peers tab shows **Connecting**, then **Direct** or **Relayed**. If the connection drops, click **Reconnect**.
-3. Open the **Tunnels** tab. Your friend's shared games are listed under their name. Click **Connect**.
+1. Open lanlink. With an invite code, click **Join Network** and paste it. With your friend's ID, click **Add peer** under *Direct peers*, paste it, and click **Add**.
+2. Wait for your friend to click **Allow**. The Networks tab shows **Connecting**, then **Direct** or **Relayed**. If the connection drops, click **Reconnect**.
+3. Open the **Tunnels** tab. Shared games are listed under the network, or under your friend's name for direct peers. Click **Connect**.
 4. lanlink opens a local address such as `127.0.0.1:25565` and shows it next to the game. It uses the same port as on your friend's computer when that port is free on yours, and a random free port otherwise.
 5. In Minecraft, the world shows up in *Multiplayer* as "<friend> - <game> (lanlink)". You can also use *Direct Connection* with the address from the Tunnels tab.
 
 Connected tunnels are remembered and reopen the next time lanlink starts. Use the toggle next to a tunnel to turn that off, or the **x** to close it.
+
+### Networks
+
+- **Create:** click **New Network**, pick a name and color, and choose who can join: anyone with the code, only people you approve, or nobody by code. lanlink then shows the invite code.
+- **Invite:** click **Invite code** on the network (or **Invite a friend…**), copy the code and send it. In the same sheet you can set when the code expires, switch between *Ask me first* and *Auto-approve*, make a new code, or revoke it.
+- **Join:** click **Join Network** and paste the code. With *Ask me first* the owner sees "*name* wants to join *network*" and clicks **Allow**, and you're let in automatically.
+- **Choose who sees a service:** in **Hosting**, open the service's **⋯** menu and pick networks under *Share with*. *Everyone I'm connected to* is the default.
+- **Manage:** the owner can rename the network, remove members, move them to another network they own, or delete it. Members can leave. Removed members lose access right away and their tunnels close.
 
 ### Background and tray
 
@@ -220,7 +242,7 @@ The **Settings** tab has these sections:
 
 ## Troubleshooting
 
-**Relayed instead of Direct.** The Peers tab shows how each friend is connected. Direct is the best case. Relayed means traffic goes through the relay server, which is common when one side is behind CGNAT (many mobile and some home ISPs). It still works but adds latency.
+**Relayed instead of Direct.** The Networks tab shows how each friend is connected. Direct is the best case. Relayed means traffic goes through the relay server, which is common when one side is behind CGNAT (many mobile and some home ISPs). It still works but adds latency.
 
 **Connected, but the game says it can't connect.** The host's game isn't listening on the shared port, and the player's lanlink shows "Nothing is listening on ... on <friend>'s computer". Check that the world is open to LAN and that the host's Hosting tab doesn't say "Nothing is listening on this port". Minecraft picks a new port each time you open to LAN. Services marked as Minecraft follow the new port automatically when exactly one LAN world is open. Otherwise, share it again.
 
@@ -242,7 +264,7 @@ What lanlink protects:
 
 - **Encryption.** All traffic between peers is end-to-end encrypted with QUIC and TLS 1.3, including traffic that goes through a relay.
 - **Identity.** Peers are identified by Ed25519 public keys and must prove they hold the matching private key, so nobody can pose as a friend without their `identity.key`.
-- **Access.** Only IDs on your allowlist can reach your shared services. Unknown peers can send you a connection request with a name, nothing more.
+- **Access.** Only IDs on your allowlist and members of your networks can reach your shared services, and only the services shared with them. Unknown peers can send you a connection request with a name, or a join request with an invite code, nothing more. Only a network's owner can add members to it.
 - **Scope.** Only the ports you share are reachable, and only while sharing is on. Nothing else on your computer or network is exposed. Tunnels on the player's side listen on `127.0.0.1` only.
 - **Relays.** A relay forwards encrypted packets it can't read. It does see both IDs, both IP addresses, and how much traffic flows and when.
 
@@ -269,6 +291,10 @@ lanlink remove <id>                          # remove a peer and its saved tunne
 lanlink host --name minecraft --port 25565   # share a local TCP port until Ctrl-C
 lanlink host --name game --port 7777 --udp   # share a UDP port
 lanlink connect <id> minecraft --local 127.0.0.1:25565   # forward a peer's service
+lanlink network create "Friday squad" --ask  # create a network, print its invite code
+lanlink network join <code>                  # join with an invite code
+lanlink network list                         # networks, members and codes
+lanlink network approve <network> <id>       # let in someone who asked to join
 lanlink --version
 ```
 
@@ -291,7 +317,7 @@ See [`deploy/relay/README.md`](deploy/relay/README.md) for ports, setup and heal
 | `crates/app` | `lanlink-app` | [gpui](https://www.gpui.rs) desktop app, binary `lanlink-app` (shipped as `lanlink.exe` and `lanlink.app`). |
 | `crates/relay` | `lanlink-relay` | Self-hosted iroh relay for a VPS. |
 
-Inside `crates/core`, `node.rs` runs the endpoint, connections and tunnels, `api.rs` adds the management calls the GUI uses, `protocol.rs` is the wire format, `forward.rs` copies TCP and UDP traffic, and `lan.rs` handles Minecraft LAN announcements.
+Inside `crates/core`, `node.rs` runs the endpoint, connections and tunnels, `api.rs` adds the management calls the GUI uses, `protocol.rs` is the wire format, `network.rs` and `membership.rs` are networks, `forward.rs` copies TCP and UDP traffic, and `lan.rs` handles Minecraft LAN announcements.
 
 ### Building
 

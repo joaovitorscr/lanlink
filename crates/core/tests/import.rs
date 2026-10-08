@@ -1,7 +1,9 @@
 //! Importing a config into a running node.
 
 use lanlink_core::export::{self, ImportMode};
-use lanlink_core::{Config, ConnState, Node, NodeId, Protocol, SavedTunnel, SecretKey, Service};
+use lanlink_core::{
+    Config, ConnState, Member, Network, Node, NodeId, Protocol, SavedTunnel, SecretKey, Service,
+};
 use std::net::{Ipv4Addr, SocketAddr};
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -167,5 +169,49 @@ async fn import_applies_to_running_node() -> anyhow::Result<()> {
 
     client.shutdown().await?;
     host.shutdown().await?;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn imported_network_allows_its_members() -> anyhow::Result<()> {
+    set_test_dir();
+    let (me_key, friend_key) = (SecretKey::generate(), SecretKey::generate());
+    let (me_id, friend_id) = (me_key.public(), friend_key.public());
+    let owner_id = SecretKey::generate().public();
+
+    let me = Node::start_with_secret_key(config(&[], vec![]), me_key).await?;
+    // The friend allows us directly; we only know it through the imported network.
+    let friend = Node::start_with_secret_key(config(&[me_id], vec![]), friend_key).await?;
+    me.add_peer_addr(local_addr(&friend));
+    friend.add_peer_addr(local_addr(&me));
+    let res = tokio::time::timeout(Duration::from_secs(20), friend.connect(me_id)).await?;
+    assert!(res.is_err(), "not allowed before the import");
+
+    let mut net = Network::new("Crew", owner_id, "Olivia");
+    for id in [me_id, friend_id] {
+        net.members.push(Member {
+            id: id.to_string(),
+            name: String::new(),
+            joined_at: 0,
+        });
+    }
+    let file = Config {
+        networks: vec![net.clone()],
+        ..config(&[], vec![])
+    };
+    let imported = export::parse(export::export(&file).as_bytes())?;
+    me.apply_config(imported.resolve(&me.config(), ImportMode::Merge))
+        .await?;
+    assert!(me.networks().iter().any(|n| n.id == net.id));
+    let peers: Vec<NodeId> = me.peers().iter().map(|p| p.id).collect();
+    assert!(peers.contains(&owner_id) && peers.contains(&friend_id));
+    assert!(
+        wait_for(40, || connected(&friend, me_id)).await,
+        "member of an imported network cannot connect: {:?}",
+        friend.peers()
+    );
+
+    friend.shutdown().await?;
+    me.shutdown().await?;
     Ok(())
 }

@@ -1,12 +1,15 @@
 //! lanlink-core: peer-to-peer port forwarding over iroh (QUIC, TLS 1.3, hole punching + relay fallback).
 //!
 //! Used by both `cli` and `app`. [`Node`] (node.rs) runs the endpoint, connections and tunnels;
-//! api.rs adds the management calls the GUI uses; protocol.rs is the wire format.
+//! api.rs adds the management calls the GUI uses; protocol.rs is the wire format; network.rs
+//! and membership.rs add networks (groups of friends, see `Network`).
 //!
 //! Model:
 //! - Every node has a persistent Ed25519 identity (`NodeId`), stored under the config dir.
 //! - A node may HOST services (local TCP/UDP ports it exposes) and may CONNECT to services on allowed peers.
-//! - Only peers in the allowlist may open connections; everyone else is rejected at the QUIC handshake.
+//! - Only allowed peers may open connections: those in the allowlist and members of a network
+//!   we are in. Everyone else is rejected right after the QUIC handshake (except for one
+//!   join request carrying a valid invite token).
 //! - One QUIC connection per peer. Each inbound TCP socket maps to one bidirectional QUIC stream.
 //!   UDP uses QUIC datagrams with a small header carrying the service index and a flow id (one
 //!   flow per local sender); packets above the datagram limit are fragmented.
@@ -19,6 +22,8 @@ pub mod export;
 pub mod forward;
 pub mod instance;
 pub mod lan;
+mod membership;
+pub mod network;
 pub mod node;
 pub mod protocol;
 pub mod stats;
@@ -29,7 +34,11 @@ pub use api::{
 };
 pub use config::{Config, Protocol, SavedTunnel, Service};
 pub use iroh::{EndpointId as NodeId, SecretKey};
+pub use network::{
+    Approval, Invite, InviteCode, InviteExpiry, Member, Network, NetworkColor, NetworkPolicy,
+};
 pub use node::{ConnState, Node, NodeEvent, PeerInfo};
+pub use protocol::JoinStatus;
 pub use stats::LatencyStats;
 
 use std::net::SocketAddr;
