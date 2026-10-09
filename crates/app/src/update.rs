@@ -1,6 +1,8 @@
 //! Updates from the GitHub releases of [`build_info::REPO`]. Stable builds compare with the
 //! latest stable release, nightly builds with the newest pre-release, and dev builds never
-//! check (unless `LANLINK_UPDATE_TEST_CHANNEL` is set, see [`source`]).
+//! check (unless `LANLINK_UPDATE_TEST_CHANNEL` is set, see [`source`]). The user can pick
+//! the other [`Channel`] in Settings; moving from nightly to stable offers the latest stable
+//! even when it is older than the running nightly.
 //!
 //! Installing: [`plan`] picks the release asset for this platform, [`prepare`] downloads it
 //! next to the config dir and checks it against the release's `SHA256SUMS`, and on macOS
@@ -15,7 +17,7 @@ use std::time::Duration;
 
 use anyhow::{bail, Context as _};
 use lanlink_core::{build_info, Config};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tokio::io::AsyncWriteExt;
 
@@ -53,18 +55,45 @@ struct GhRelease {
     assets: Vec<Asset>,
 }
 
+/// Where updates come from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Channel {
+    Stable,
+    Nightly,
+}
+
+impl Channel {
+    pub const ALL: [Channel; 2] = [Channel::Stable, Channel::Nightly];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Channel::Stable => "Stable",
+            Channel::Nightly => "Nightly",
+        }
+    }
+
+    /// Lowercase, for running text: "new nightly releases".
+    pub fn name(self) -> &'static str {
+        match self {
+            Channel::Stable => "stable",
+            Channel::Nightly => "nightly",
+        }
+    }
+}
+
 /// Channel and version to compare releases against, or `None` when this build doesn't
 /// check. Dev builds can pretend to be an old build of a channel to exercise the update
 /// flow: `LANLINK_UPDATE_TEST_CHANNEL=nightly|stable`, optionally with
 /// `LANLINK_UPDATE_TEST_VERSION` (default 0.0.0). Release builds ignore both.
-fn source() -> Option<(&'static str, String)> {
+fn source() -> Option<(Channel, String)> {
     match build_info::CHANNEL {
-        "stable" => Some(("stable", build_info::VERSION.to_string())),
-        "nightly" => Some(("nightly", build_info::VERSION.to_string())),
+        "stable" => Some((Channel::Stable, build_info::VERSION.to_string())),
+        "nightly" => Some((Channel::Nightly, build_info::VERSION.to_string())),
         _ => {
             let channel = match std::env::var("LANLINK_UPDATE_TEST_CHANNEL").ok()?.as_str() {
-                "stable" => "stable",
-                "nightly" => "nightly",
+                "stable" => Channel::Stable,
+                "nightly" => Channel::Nightly,
                 _ => return None,
             };
             let version =
@@ -79,9 +108,9 @@ pub fn supported() -> bool {
     source().is_some()
 }
 
-/// The channel updates come from ("stable" or "nightly").
-pub fn channel() -> &'static str {
-    source().map_or(build_info::CHANNEL, |(c, _)| c)
+/// The channel this build came from, used when the user hasn't picked one.
+pub fn default_channel() -> Channel {
+    source().map_or(Channel::Stable, |(c, _)| c)
 }
 
 fn client(timeout: Option<Duration>) -> anyhow::Result<reqwest::Client> {
@@ -98,14 +127,14 @@ fn client(timeout: Option<Duration>) -> anyhow::Result<reqwest::Client> {
     Ok(builder.build()?)
 }
 
-/// Ask GitHub for the newest release on this build's channel. `None` means up to date.
-pub async fn check() -> anyhow::Result<Option<Release>> {
-    let Some((channel, version)) = source() else {
+/// Ask GitHub for the newest release on `channel`. `None` means up to date.
+pub async fn check(channel: Channel) -> anyhow::Result<Option<Release>> {
+    let Some((_, version)) = source() else {
         return Ok(None);
     };
     let client = client(Some(Duration::from_secs(20)))?;
     let repo = build_info::REPO;
-    let url = if channel == "stable" {
+    let url = if channel == Channel::Stable {
         format!("https://api.github.com/repos/{repo}/releases/latest")
     } else {
         format!("https://api.github.com/repos/{repo}/releases?per_page=30")
@@ -118,7 +147,7 @@ pub async fn check() -> anyhow::Result<Option<Release>> {
         .error_for_status()?
         .bytes()
         .await?;
-    let releases = if channel == "stable" {
+    let releases = if channel == Channel::Stable {
         vec![serde_json::from_slice::<GhRelease>(&body).context("parsing latest release")?]
     } else {
         serde_json::from_slice::<Vec<GhRelease>>(&body).context("parsing releases")?
@@ -126,10 +155,13 @@ pub async fn check() -> anyhow::Result<Option<Release>> {
     Ok(newer(&version, channel, releases))
 }
 
-/// The newest release on `channel` that is newer than `current`, if any.
-fn newer(current: &str, channel: &str, releases: Vec<GhRelease>) -> Option<Release> {
+/// The newest release on `channel` that is newer than `current`, if any. On the stable
+/// channel a pre-release `current` (a nightly) takes any other stable version, so
+/// switching back to stable can step down to the latest stable release.
+fn newer(current: &str, channel: Channel, releases: Vec<GhRelease>) -> Option<Release> {
     let current = semver::Version::parse(current).ok()?;
-    let want_prerelease = channel == "nightly";
+    let want_prerelease = channel == Channel::Nightly;
+    let leaving_nightly = channel == Channel::Stable && !current.pre.is_empty();
     releases
         .into_iter()
         .filter(|r| !r.draft && r.prerelease == want_prerelease)
@@ -137,7 +169,7 @@ fn newer(current: &str, channel: &str, releases: Vec<GhRelease>) -> Option<Relea
             let v = semver::Version::parse(r.tag_name.trim_start_matches('v')).ok()?;
             Some((v, r))
         })
-        .filter(|(v, _)| *v > current)
+        .filter(|(v, _)| *v > current || (leaving_nightly && *v != current))
         .max_by(|a, b| a.0.cmp(&b.0))
         .map(|(v, r)| Release {
             version: v.to_string(),
@@ -628,10 +660,10 @@ mod tests {
                 rel("v0.1.0", false),
             ]
         };
-        let r = newer("0.1.0", "stable", list()).unwrap();
+        let r = newer("0.1.0", Channel::Stable, list()).unwrap();
         assert_eq!(r.version, "0.2.0");
         assert_eq!(r.url, "https://example.com/v0.2.0");
-        assert_eq!(newer("0.2.0", "stable", list()), None);
+        assert_eq!(newer("0.2.0", Channel::Stable, list()), None);
     }
 
     #[test]
@@ -642,16 +674,40 @@ mod tests {
             rel("v0.1.0-nightly.20261009.13", true),
             rel("v0.5.0", false),
         ];
-        let r = newer("0.1.0-nightly.20261008.12", "nightly", list).unwrap();
+        let r = newer("0.1.0-nightly.20261008.12", Channel::Nightly, list).unwrap();
         assert_eq!(r.version, "0.2.0-nightly.20261010.14");
     }
 
     #[test]
     fn same_or_older_nightly_is_up_to_date() {
         let list = vec![rel("v0.1.0-nightly.20261009.13", true)];
-        assert_eq!(newer("0.1.0-nightly.20261009.13", "nightly", list), None);
+        assert_eq!(
+            newer("0.1.0-nightly.20261009.13", Channel::Nightly, list),
+            None
+        );
         let list = vec![rel("v0.1.0-nightly.20261009.13", true)];
-        assert_eq!(newer("0.1.0-nightly.20261010.14", "nightly", list), None);
+        assert_eq!(
+            newer("0.1.0-nightly.20261010.14", Channel::Nightly, list),
+            None
+        );
+    }
+
+    #[test]
+    fn nightly_switching_to_stable_takes_latest_stable() {
+        let r = newer(
+            "0.3.0-nightly.20261010.20",
+            Channel::Stable,
+            vec![rel("v0.2.0", false)],
+        );
+        assert_eq!(r.unwrap().version, "0.2.0");
+    }
+
+    #[test]
+    fn stable_switching_to_nightly_only_moves_forward() {
+        let list = || vec![rel("v0.2.0-nightly.20261010.14", true)];
+        let r = newer("0.1.0", Channel::Nightly, list()).unwrap();
+        assert_eq!(r.version, "0.2.0-nightly.20261010.14");
+        assert_eq!(newer("0.2.0", Channel::Nightly, list()), None);
     }
 
     #[test]
@@ -659,9 +715,12 @@ mod tests {
         let mut draft = rel("v9.0.0", false);
         draft.draft = true;
         let list = vec![draft, rel("latest", false), rel("v0.1.1", false)];
-        assert_eq!(newer("0.1.0", "stable", list).unwrap().version, "0.1.1");
         assert_eq!(
-            newer("not-a-version", "stable", vec![rel("v1.0.0", false)]),
+            newer("0.1.0", Channel::Stable, list).unwrap().version,
+            "0.1.1"
+        );
+        assert_eq!(
+            newer("not-a-version", Channel::Stable, vec![rel("v1.0.0", false)]),
             None
         );
     }
@@ -671,7 +730,7 @@ mod tests {
         let json = r#"{"tag_name":"v0.3.0","html_url":"https://x/r","prerelease":false,
             "assets":[{"name":"SHA256SUMS","browser_download_url":"https://x/SHA256SUMS","size":3}]}"#;
         let r: GhRelease = serde_json::from_str(json).unwrap();
-        let r = newer("0.2.0", "stable", vec![r]).unwrap();
+        let r = newer("0.2.0", Channel::Stable, vec![r]).unwrap();
         assert_eq!(
             r.assets,
             vec![Asset {

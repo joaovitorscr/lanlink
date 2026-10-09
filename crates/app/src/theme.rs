@@ -51,6 +51,9 @@ pub struct Prefs {
     /// Download and verify new releases in the background, then offer "Restart to update".
     #[serde(default)]
     pub auto_install: bool,
+    /// Update channel the user picked. `None` follows the channel this build came from.
+    #[serde(default)]
+    pub update_channel: Option<crate::update::Channel>,
     /// Mask node IDs in the UI, e.g. while streaming. Copy still copies the real ID.
     #[serde(default = "default_true")]
     pub hide_ids: bool,
@@ -77,6 +80,7 @@ impl Prefs {
                 check_updates: true,
                 dismissed_update: None,
                 auto_install: false,
+                update_channel: None,
                 hide_ids: true,
             })
     }

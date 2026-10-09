@@ -13,6 +13,7 @@ use crate::state::{
     approval_label, expiry_label, MenuKind, Root, Sheet, WhoCanJoin, EXPIRY_CHOICES,
 };
 use crate::theme::{Appearance, Theme};
+use crate::update;
 use crate::views::peers::network_color;
 use crate::widgets::*;
 
@@ -984,6 +985,14 @@ impl Root {
                     MenuItem::check(self.prefs.appearance == a, a.label(), move |r, cx| {
                         r.prefs.appearance = a;
                         r.save_prefs(cx);
+                    })
+                })
+                .collect(),
+            MenuKind::UpdateChannel => update::Channel::ALL
+                .into_iter()
+                .map(|c| {
+                    MenuItem::check(self.update_channel() == c, c.label(), move |r, cx| {
+                        r.set_update_channel(c, cx);
                     })
                 })
                 .collect(),
