@@ -53,6 +53,7 @@ pub enum MenuKind {
     Service(String),
     Protocol,
     Appearance,
+    UpdateChannel,
     NewNetWho,
     NewNetExpiry,
     InviteExpiry(String),
@@ -139,7 +140,8 @@ pub enum Msg {
     Info(String),
     RelaySaved(bool),
     Imported(ImportOutcome),
-    UpdateChecked(Result<Option<Release>, String>),
+    /// Result of a check against the given channel.
+    UpdateChecked(update::Channel, Result<Option<Release>, String>),
     UpdateProgress {
         version: String,
         done: u64,
@@ -434,8 +436,13 @@ impl Root {
                 }
                 self.show_toast(text, false, cx);
             }
-            Msg::UpdateChecked(res) => {
+            Msg::UpdateChecked(channel, res) => {
                 self.update.checking = false;
+                if channel != self.update_channel() {
+                    // The user switched channels while this check ran.
+                    self.check_for_updates(cx);
+                    return;
+                }
                 self.update.last_check = Some(Instant::now());
                 match res {
                     Ok(release) => {
@@ -1091,10 +1098,11 @@ impl Root {
             return;
         }
         self.update.checking = true;
+        let channel = self.update_channel();
         let tx = self.tx.clone();
         self.rt.spawn(async move {
-            let res = update::check().await.map_err(|e| format!("{e:#}"));
-            let _ = tx.send(Msg::UpdateChecked(res));
+            let res = update::check(channel).await.map_err(|e| format!("{e:#}"));
+            let _ = tx.send(Msg::UpdateChecked(channel, res));
         });
         cx.notify();
     }
@@ -1237,6 +1245,29 @@ impl Root {
             self.prefs.dismissed_update = Some(r.version.clone());
             self.save_prefs(cx);
         }
+    }
+
+    /// The channel update checks use: the user's pick, else this build's.
+    pub fn update_channel(&self) -> update::Channel {
+        self.prefs
+            .update_channel
+            .unwrap_or_else(update::default_channel)
+    }
+
+    pub fn set_update_channel(&mut self, channel: update::Channel, cx: &mut Context<Self>) {
+        if channel == self.update_channel() {
+            return;
+        }
+        self.prefs.update_channel = Some(channel);
+        self.save_prefs(cx);
+        // The release found on the old channel no longer applies.
+        self.update.available = None;
+        self.update.failed = false;
+        self.update.last_check = None;
+        if self.prefs.check_updates {
+            self.check_for_updates(cx);
+        }
+        cx.notify();
     }
 
     pub fn toggle_update_checks(&mut self, cx: &mut Context<Self>) {

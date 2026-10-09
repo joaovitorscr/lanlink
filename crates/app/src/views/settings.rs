@@ -341,12 +341,28 @@ impl Root {
                         "Check for updates",
                         Some(format!(
                             "Looks for new {} releases on GitHub every 6 hours",
-                            update::channel()
+                            self.update_channel().name()
                         )),
                     ))
                     .child(
                         toggle(&t, "check-updates", self.prefs.check_updates)
                             .on_click(cx.listener(|this, _, _, cx| this.toggle_update_checks(cx))),
+                    ),
+            )
+            .child(
+                group_row(&t, false)
+                    .child(title_sub(
+                        &t,
+                        "Update channel",
+                        Some("Nightly builds come out daily and may be unstable"),
+                    ))
+                    .child(
+                        popup(&t, "update-channel", self.update_channel().label()).on_click(
+                            cx.listener(|this, ev: &gpui::ClickEvent, _, cx| {
+                                let at = this.menu_at(ev.position());
+                                this.toggle_menu(MenuKind::UpdateChannel, at, cx);
+                            }),
+                        ),
                     ),
             )
             .child(auto)
